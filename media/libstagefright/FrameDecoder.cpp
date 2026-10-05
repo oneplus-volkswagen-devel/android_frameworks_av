@@ -472,19 +472,16 @@ FrameDecoder::FrameDecoder(
         const AString &componentName,
         const sp<MetaData> &trackMeta,
         const sp<IMediaSource> &source)
-    : mIDRSent(false),
-// QTI_BEGIN: 2020-10-16: Video: stagefright: FrameDecoder: use 2 threads for heif decoder
+    : mComponentName(componentName),
+      mUseBlockModel(false),
+      mIDRSent(false),
       mHaveMoreInputs(true),
       mFirstSample(true),
       mSource(source),
-// QTI_END: 2020-10-16: Video: stagefright: FrameDecoder: use 2 threads for heif decoder
-      mSourceStopped(false),
-      mComponentName(componentName),
       mTrackMeta(trackMeta),
       mDstFormat(OMX_COLOR_Format16bitRGB565),
-// QTI_BEGIN: 2020-10-16: Video: stagefright: FrameDecoder: use 2 threads for heif decoder
-      mDstBpp(2) {
-// QTI_END: 2020-10-16: Video: stagefright: FrameDecoder: use 2 threads for heif decoder
+      mDstBpp(2),
+      mSourceStopped(false) {
 // QTI_BEGIN: 2020-08-20: Video: stagefright: FrameDecoder: set heif decoder hint
     ALOGD("FrameDecoder created");
 // QTI_END: 2020-08-20: Video: stagefright: FrameDecoder: set heif decoder hint
