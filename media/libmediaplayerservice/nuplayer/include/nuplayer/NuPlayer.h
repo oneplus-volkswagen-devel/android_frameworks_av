@@ -43,7 +43,9 @@ struct NuPlayer : public AHandler {
 
     void setDataSourceAsync(const sp<IStreamSource> &source);
 
-    void setDataSourceAsync(
+// QTI_BEGIN: 2018-04-12: Video: httplive: refactor for HLS customization
+    virtual void setDataSourceAsync(
+// QTI_END: 2018-04-12: Video: httplive: refactor for HLS customization
             const sp<IMediaHTTPService> &httpService,
             const char *url,
             const KeyedVector<String8, String8> *headers);
@@ -110,12 +112,17 @@ protected:
     virtual ~NuPlayer();
 
     virtual void onMessageReceived(const sp<AMessage> &msg);
-
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    virtual bool ifDecodedPCMOffload() {return false;}
+    virtual void setDecodedPcmOffload(bool /*decodePcmOffload*/) {}
+    virtual bool canOffloadDecodedPCMStream(const sp<MetaData> /*meta*/,
+            bool /*hasVideo*/, bool /*isStreaming*/, audio_stream_type_t /*streamType*/) {return false;}
+    static bool IsHTTPLiveURL(const char *url);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 public:
     struct NuPlayerStreamListener;
     struct Source;
 
-private:
     struct Decoder;
     struct DecoderBase;
     struct DecoderPassThrough;
@@ -134,6 +141,9 @@ private:
     struct PostMessageAction;
     struct SimpleAction;
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+protected:
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     enum {
         kWhatSetDataSource              = '=DaS',
         kWhatPrepare                    = 'prep',
@@ -292,7 +302,9 @@ private:
             int64_t currentPositionUs, bool forceNonOffload, bool needsToCreateAudioDecoder);
     void determineAudioModeChange(const sp<AMessage> &audioFormat);
 
-    status_t instantiateDecoder(
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    virtual status_t instantiateDecoder(
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             bool audio, sp<DecoderBase> *decoder, bool checkAudioModeChange = true);
 
     status_t onInstantiateSecureDecoders();
@@ -333,7 +345,9 @@ private:
     void performSetSurface(const sp<Surface> &wrapper);
     void performResumeDecoders(bool needNotify);
 
-    void onSourceNotify(const sp<AMessage> &msg);
+// QTI_BEGIN: 2018-04-12: Video: httplive: refactor for HLS customization
+    virtual void onSourceNotify(const sp<AMessage> &msg);
+// QTI_END: 2018-04-12: Video: httplive: refactor for HLS customization
     void onClosedCaptionNotify(const sp<AMessage> &msg);
 
     void queueDecoderShutdown(

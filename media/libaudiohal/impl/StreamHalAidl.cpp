@@ -1155,7 +1155,7 @@ status_t StreamOutHalAidl::getRenderPosition(uint64_t *dspFrames) {
     // See the table at the start of 'StreamHalInterface' on when it needs to reset.
     int64_t mostRecentResetPoint;
     if (!mContext.isAsynchronous() &&
-        !mContext.isDirect() &&
+        /* !mContext.isDirect() && For QC, direct PCM timestamp is reset at AudioFlinger */
         audio_has_proportional_frames(mConfig.format)) {
         mostRecentResetPoint = statePositions.observable.framesAtStandby;
     } else {

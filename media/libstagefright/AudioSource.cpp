@@ -32,6 +32,10 @@
 #include <media/stagefright/foundation/ALooper.h>
 #include <cutils/properties.h>
 
+// QTI_BEGIN: 2020-06-10: Audio: libstagefright: check for audio source aggregate before initialization
+#include <stagefright/AVExtensions.h>
+
+// QTI_END: 2020-06-10: Audio: libstagefright: check for audio source aggregate before initialization
 namespace android {
 
 using content::AttributionSourceState;
@@ -93,9 +97,19 @@ void AudioSource::set(
    mNoMoreFramesToRead = false;
   ALOGV("sampleRate: %u, outSampleRate: %u, channelCount: %u",
         sampleRate, outSampleRate, channelCount);
-  CHECK(channelCount == 1 || channelCount == 2);
+// QTI_BEGIN: 2021-09-15: Audio: frameworks/av: Support for 6 channel audio record
+  CHECK(channelCount == 1 || channelCount == 2 || channelCount == 6);
+// QTI_END: 2021-09-15: Audio: frameworks/av: Support for 6 channel audio record
   CHECK(sampleRate > 0);
 
+// QTI_BEGIN: 2021-04-29: Audio: libstagefright: check for audio source aggregate before initialization
+  bool bAggregate = AVUtils::get()->isAudioSourceAggregate(attr, channelCount);
+  if (bAggregate) {
+      mInitCheck = NO_INIT;
+      return;
+  }
+
+// QTI_END: 2021-04-29: Audio: libstagefright: check for audio source aggregate before initialization
   size_t minFrameCount;
   status_t status = AudioRecord::getMinFrameCount(&minFrameCount,
                                                   sampleRate,
@@ -226,7 +240,9 @@ sp<MetaData> AudioSource::getFormat() {
     meta->setCString(kKeyMIMEType, MEDIA_MIMETYPE_AUDIO_RAW);
     meta->setInt32(kKeySampleRate, mSampleRate);
     meta->setInt32(kKeyChannelCount, mRecord->channelCount());
-    meta->setInt32(kKeyMaxInputSize, kMaxBufferSize);
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+    meta->setInt32(kKeyMaxInputSize, mMaxBufferSize);
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
     meta->setInt32(kKeyPcmEncoding, kAudioEncodingPcm16bit);
 
     return meta;
@@ -423,9 +439,11 @@ size_t AudioSource::onMoreData(const AudioRecord::Buffer& audioBuffer) {
 
     while (numLostBytes > 0) {
         uint64_t bufferSize = numLostBytes;
-        if (numLostBytes > kMaxBufferSize) {
-            numLostBytes -= kMaxBufferSize;
-            bufferSize = kMaxBufferSize;
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+        if (numLostBytes > mMaxBufferSize) {
+            numLostBytes -= mMaxBufferSize;
+            bufferSize = mMaxBufferSize;
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
         } else {
             numLostBytes = 0;
         }

@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+// QTI_BEGIN: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
 //#define LOG_NDEBUG 0
+// QTI_END: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
 #define LOG_TAG "MPEG4Writer"
 
 #include <algorithm>
@@ -33,6 +35,9 @@
 #include <functional>
 
 #include <media/stagefright/MediaSource.h>
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+#include <media/stagefright/foundation/ABitReader.h>
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AMessage.h>
 #include <media/stagefright/foundation/ALookup.h>
@@ -53,6 +58,10 @@
 #include <media/esds/ESDS.h>
 #include "include/HevcUtils.h"
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include <stagefright/AVExtensions.h>
+
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 #include <com_android_internal_camera_flags.h>
 #include <com_android_media_editing_flags.h>
 namespace editing_flags = com::android::media::editing::flags;
@@ -172,7 +181,8 @@ public:
     bool isHeif() const { return mIsHeif; }
     bool isAudio() const { return mIsAudio; }
     bool isMPEG4() const { return mIsMPEG4; }
-    bool usePrefix() const { return mIsAvc || mIsHevc || mIsHeic || mIsDovi; }
+    bool usePrefix() const { return (mIsAvc || mIsHevc || mIsHeic || mIsDovi)
+      && !mNalLengthBitstream; }
     bool isExifData(MediaBufferBase *buffer, uint32_t *tiffHdrOffset) const;
     bool isGainmapMetaData(MediaBufferBase* buffer, uint32_t* offset) const;
     bool isGainmapData(MediaBufferBase* buffer, uint32_t* offset) const;
@@ -349,13 +359,20 @@ public:
     bool mIsAvif;
     bool mIsHeif;
     bool mIsMPEG4;
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+    bool mIsMPEGH;
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
     bool mGotStartKeyFrame;
     bool mRequiresStartKeyFrame;
+    bool mTrackNeedsKeyFrames;
     bool mIsMalformed;
     TrackId mTrackId;
     int64_t mTrackDurationUs;
     int64_t mMaxChunkDurationUs;
     int64_t mLastDecodingTimeUs;
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+    int32_t mNalLengthBitstream;
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
     int64_t mEstimatedTrackSizeBytes;
     int64_t mMdatSizeBytes;
     int32_t mTimeScale;
@@ -439,7 +456,6 @@ public:
 
     void dumpTimeStamps();
 
-    int64_t getStartTimeOffsetTimeUs() const;
     int32_t getStartTimeOffsetScaledTime() const;
 
     static void *ThreadWrapper(void *me);
@@ -461,6 +477,9 @@ public:
 
     status_t getDolbyVisionProfile();
 
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+    status_t parseMHASPackets(MediaBufferBase *buffer);
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
     // Track authoring progress status
     void trackProgressStatus(int64_t timeUs, status_t err = OK);
     void initTrackingProgressStatus(MetaData *params);
@@ -515,6 +534,9 @@ public:
     void writeMdcvAndClliBoxes();
     void writeMp4aEsdsBox();
     void writeMp4vEsdsBox();
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+    void writeMhaCBox();
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
     void writeAudioFourCCBox();
     void writeVideoFourCCBox();
     void writeMetadataFourCCBox();
@@ -690,6 +712,10 @@ const char *MPEG4Writer::Track::getFourCCForMime(const char *mime) {
             return "sawb";
         } else if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AAC, mime)) {
             return "mp4a";
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+        } else if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_MHAS, mime)) {
+            return "mhm1";
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
         }
     } else if (!strncasecmp(mime, "video/", 6)) {
         if (!strcasecmp(MEDIA_MIMETYPE_VIDEO_MPEG4, mime)) {
@@ -758,6 +784,16 @@ status_t MPEG4Writer::addSource(const sp<MediaSource> &source) {
         return ERROR_UNSUPPORTED;
     }
 
+// QTI_BEGIN: 2020-05-05: Video: stagefright: Avoid null pointer dereference in writer
+    bool isAudio = !strncasecmp(mime, "audio/", 6);
+// QTI_END: 2020-05-05: Video: stagefright: Avoid null pointer dereference in writer
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    if (isAudio && !AVUtils::get()->isAudioMuxFormatSupported(mime)) {
+        ALOGE("Muxing is not supported for %s", mime);
+        return ERROR_UNSUPPORTED;
+    }
+
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     // This is a metadata track or the first track of either audio or video
     // Go ahead to add the track.
     Track *track = new Track(this, source, 1 + mTracks.size());
@@ -952,7 +988,6 @@ status_t MPEG4Writer::start(MetaData *param) {
      */
     int32_t fileSizeBits = fpathconf(mFd, _PC_FILESIZEBITS);
     ALOGD("fpathconf _PC_FILESIZEBITS:%" PRId32, fileSizeBits);
-
     if (fileSizeBits < 0) {
         ALOGW("fpathconf(%d) failed with err: %s. Defaulting to 4GB.", mFd, strerror(errno));
         // Fallback to 32-bit (4GB) limit to prevent data corruption on FAT32 if the
@@ -961,7 +996,6 @@ status_t MPEG4Writer::start(MetaData *param) {
     } else {
         fileSizeBits = std::min(fileSizeBits, 52 /* cap it below 4 peta bytes */);
     }
-
     int64_t maxFileSizeBytes = ((int64_t)1 << fileSizeBits) - 1;
     if (mMaxFileSizeLimitBytes > maxFileSizeBytes) {
         mMaxFileSizeLimitBytes = maxFileSizeBytes;
@@ -1373,8 +1407,11 @@ status_t MPEG4Writer::reset(bool stopSource, bool waitForAnyPreviousCallToComple
     int64_t maxDurationUs = 0;
     int64_t minDurationUs = 0x7fffffffffffffffLL;
     int32_t nonImageTrackCount = 0;
-    for (List<Track *>::iterator it = mTracks.begin();
-        it != mTracks.end(); ++it) {
+// QTI_BEGIN: 2018-05-17: Video: stagefright: Fix recording issues when EIS enabled
+    List<Track *>::iterator it = mTracks.end();
+    do{
+        --it;
+// QTI_END: 2018-05-17: Video: stagefright: Fix recording issues when EIS enabled
         status_t trackErr = (*it)->stop(stopSource);
         WARN_UNLESS(trackErr == OK, "%s track stopped with an error",
                     (*it)->getTrackType());
@@ -1393,7 +1430,9 @@ status_t MPEG4Writer::reset(bool stopSource, bool waitForAnyPreviousCallToComple
         if (durationUs < minDurationUs) {
             minDurationUs = durationUs;
         }
-    }
+// QTI_BEGIN: 2018-05-17: Video: stagefright: Fix recording issues when EIS enabled
+    } while (it != mTracks.begin());
+// QTI_END: 2018-05-17: Video: stagefright: Fix recording issues when EIS enabled
 
     if (nonImageTrackCount > 1) {
         ALOGD("Duration from tracks range is [%" PRId64 ", %" PRId64 "] us",
@@ -1740,7 +1779,9 @@ off64_t MPEG4Writer::addSample_l(
     return old_offset;
 }
 
-static void StripStartcode(MediaBuffer *buffer) {
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+void MPEG4Writer:: StripStartcode(MediaBuffer *buffer) {
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     if (buffer->range_length() < 4) {
         return;
     }
@@ -2230,10 +2271,15 @@ bool MPEG4Writer::reachedEOS() {
     return allDone;
 }
 
-void MPEG4Writer::setStartTimestampUs(int64_t timeUs) {
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+void MPEG4Writer::setStartTimestampUs(int64_t timeUs, int64_t *trackStartTime) {
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
     ALOGI("setStartTimestampUs: %" PRId64, timeUs);
     CHECK_GE(timeUs, 0LL);
     Mutex::Autolock autoLock(mLock);
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+    *trackStartTime = timeUs;
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
     if (mStartTimestampUs < 0 || mStartTimestampUs > timeUs) {
         mStartTimestampUs = timeUs;
         ALOGI("Earliest track starting time: %" PRId64, mStartTimestampUs);
@@ -2253,6 +2299,18 @@ int32_t MPEG4Writer::getStartTimeOffsetBFramesUs() {
     return mStartTimeOffsetBFramesUs;
 }
 
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+int64_t MPEG4Writer::getStartTimeOffsetTimeUs(int64_t startTime) {
+    int64_t trackStartTimeOffsetUs = 0;
+    Mutex::Autolock autoLock(mLock);
+    if (startTime != -1 && startTime != mStartTimestampUs) {
+        CHECK_GT(startTime, mStartTimestampUs);
+        trackStartTimeOffsetUs = startTime - mStartTimestampUs;
+    }
+    return trackStartTimeOffsetUs;
+}
+
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
 size_t MPEG4Writer::numTracks() {
     Mutex::Autolock autolock(mLock);
     return mTracks.size();
@@ -2270,9 +2328,13 @@ MPEG4Writer::Track::Track(MPEG4Writer* owner, const sp<MediaSource>& source, uin
       mStarted(false),
       mGotStartKeyFrame(false),
       mRequiresStartKeyFrame(false),
+      mTrackNeedsKeyFrames(false),
       mIsMalformed(false),
       mTrackId(aTrackId),
       mTrackDurationUs(0),
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+      mNalLengthBitstream(0),
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
       mEstimatedTrackSizeBytes(0),
       mSamplesHaveSameSize(true),
       mStszTableEntries(new ListTableEntries<uint32_t, 1>(1000)),
@@ -2326,12 +2388,20 @@ MPEG4Writer::Track::Track(MPEG4Writer* owner, const sp<MediaSource>& source, uin
     mIsHeif = mIsHeic || mIsAvif;
     mIsMPEG4 = !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_MPEG4) ||
                !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC);
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+    mIsMPEGH = !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_MHAS);
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
 
     int32_t aacProfile = 0;
     mMeta->findInt32(kKeyAACProfile, &aacProfile);
-    mRequiresStartKeyFrame = mIsVideo || (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AAC, mime)
+    mTrackNeedsKeyFrames = mIsVideo || (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AAC, mime)
                                           && aacProfile == AACObjectXHE);
 
+// QTI_BEGIN: 2021-03-19: Video: libstagefright: Add changes to handle multiple slices in writer
+    if (!mMeta->findInt32(kKeyFeatureNalLengthBitstream, &mNalLengthBitstream)) {
+        mMeta->findInt32(kKeyVendorFeatureNalLength, &mNalLengthBitstream);
+    }
+// QTI_END: 2021-03-19: Video: libstagefright: Add changes to handle multiple slices in writer
     // store temporal layer count
     if (mIsVideo) {
         int32_t count;
@@ -3151,6 +3221,12 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
         return OK;
     }
 
+    if (mTrackNeedsKeyFrames) {
+        ALOGV("%s track will wait for a key frame.", getTrackType());
+        mRequiresStartKeyFrame = true;
+        mGotStartKeyFrame = false;
+    }
+
     int64_t startTimeUs;
     if (params == NULL || !params->findInt64(kKeyTime, &startTimeUs)) {
         startTimeUs = 0;
@@ -3202,7 +3278,14 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
 
     meta->setInt64(kKeyTime, startTimeUs);
 
+// QTI_BEGIN: 2023-06-26: Video: media: Added logs in MPEG4Writer and StagefrightRecorder.
+    nsecs_t sourceStartedTime = systemTime(SYSTEM_TIME_REALTIME);
+// QTI_END: 2023-06-26: Video: media: Added logs in MPEG4Writer and StagefrightRecorder.
     status_t err = mSource->start(meta.get());
+// QTI_BEGIN: 2023-06-26: Video: media: Added logs in MPEG4Writer and StagefrightRecorder.
+    nsecs_t sourceFinishedTime = systemTime(SYSTEM_TIME_REALTIME);
+    ALOGI("Time taken by %s Track Source to start : %" PRId64 "ms" , mIsVideo ? "video" : "audio" , (sourceFinishedTime - sourceStartedTime)/1000000);
+// QTI_END: 2023-06-26: Video: media: Added logs in MPEG4Writer and StagefrightRecorder.
     if (err != OK) {
         mDone = mReachedEOS = true;
         return err;
@@ -3294,8 +3377,33 @@ const uint8_t *MPEG4Writer::Track::parseParamSet(
     CHECK(type == kNalUnitTypeSeqParamSet ||
           type == kNalUnitTypePicParamSet);
 
-    const uint8_t *nextStartCode = findNextNalStartCode(data, length);
-    *paramSetLen = nextStartCode - data;
+// QTI_BEGIN: 2018-06-19: Video: libstagefirght: Add changes to handle multiple slices in writer
+    int32_t nalLengthBistream = mNalLengthBitstream;
+    if (!memcmp("\x00\x00\x00\x01", data, 4)) {
+        nalLengthBistream = 0;
+    }
+
+// QTI_END: 2018-06-19: Video: libstagefirght: Add changes to handle multiple slices in writer
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+    const uint8_t *nextStartCode = NULL;
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+// QTI_BEGIN: 2018-06-19: Video: libstagefirght: Add changes to handle multiple slices in writer
+    if (nalLengthBistream) {
+// QTI_END: 2018-06-19: Video: libstagefirght: Add changes to handle multiple slices in writer
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+        uint32_t nalSize = 0;
+        std::copy(data, data + 4, reinterpret_cast<uint8_t *>(&nalSize));
+        nalSize = ntohl(nalSize);
+        nextStartCode = data + 4 + nalSize;
+        *paramSetLen = nalSize;
+        data = data + 4;
+    } else {
+        data = data + 4;
+        nextStartCode = findNextNalStartCode(data, length-4);
+        *paramSetLen = nextStartCode - data;
+    }
+
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
     if (*paramSetLen == 0) {
         ALOGE("Param set is malformed, since its length is 0");
         return NULL;
@@ -3376,7 +3484,9 @@ status_t MPEG4Writer::Track::parseAVCCodecSpecificData(
     size_t bytesLeft = size;
     size_t paramSetLen = 0;
     mCodecSpecificDataSize = 0;
-    while (bytesLeft > 4 && !memcmp("\x00\x00\x00\x01", tmp, 4)) {
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+    while (bytesLeft > 4 && (!memcmp("\x00\x00\x00\x01", tmp, 4) || mNalLengthBitstream)) {
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
         getNalUnitType(*(tmp + 4), &type);
         if (type == kNalUnitTypeSeqParamSet) {
             if (gotPps) {
@@ -3386,7 +3496,9 @@ status_t MPEG4Writer::Track::parseAVCCodecSpecificData(
             if (!gotSps) {
                 gotSps = true;
             }
-            nextStartCode = parseParamSet(tmp + 4, bytesLeft - 4, type, &paramSetLen);
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+            nextStartCode = parseParamSet(tmp, bytesLeft, type, &paramSetLen);
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
         } else if (type == kNalUnitTypePicParamSet) {
             if (!gotSps) {
                 ALOGE("SPS must come before PPS");
@@ -3395,7 +3507,9 @@ status_t MPEG4Writer::Track::parseAVCCodecSpecificData(
             if (!gotPps) {
                 gotPps = true;
             }
-            nextStartCode = parseParamSet(tmp + 4, bytesLeft - 4, type, &paramSetLen);
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+            nextStartCode = parseParamSet(tmp, bytesLeft, type, &paramSetLen);
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
         } else {
             ALOGE("Only SPS and PPS Nal units are expected");
             return ERROR_MALFORMED;
@@ -3469,7 +3583,9 @@ status_t MPEG4Writer::Track::makeAVCCodecSpecificData(
     }
 
     // Data is in the form of AVCCodecSpecificData
-    if (memcmp("\x00\x00\x00\x01", data, 4)) {
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+    if (memcmp("\x00\x00\x00\x01", data, 4) && !mNalLengthBitstream) {
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
         return copyAVCCodecSpecificData(data, size);
     }
 
@@ -3541,16 +3657,45 @@ status_t MPEG4Writer::Track::parseHEVCCodecSpecificData(
     const uint8_t *tmp = data;
     const uint8_t *nextStartCode = data;
     size_t bytesLeft = size;
-    while (bytesLeft > 4 && !memcmp("\x00\x00\x00\x01", tmp, 4)) {
-        nextStartCode = findNextNalStartCode(tmp + 4, bytesLeft - 4);
-        status_t err = paramSets.addNalUnit(tmp + 4, (nextStartCode - tmp) - 4);
-        if (err != OK) {
-            return ERROR_MALFORMED;
-        }
+// QTI_BEGIN: 2018-06-19: Video: libstagefirght: Add changes to handle multiple slices in writer
+    int32_t nalLengthBistream = mNalLengthBitstream;
+    if (!memcmp("\x00\x00\x00\x01", tmp, 4)) {
+        nalLengthBistream = 0;
+    }
 
-        // Move on to find the next parameter set
-        bytesLeft -= nextStartCode - tmp;
-        tmp = nextStartCode;
+    if (nalLengthBistream) {
+// QTI_END: 2018-06-19: Video: libstagefirght: Add changes to handle multiple slices in writer
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+        while  (bytesLeft > 4) {
+            uint32_t nalSize = 0;
+            std::copy(tmp, tmp+4, reinterpret_cast<uint8_t *>(&nalSize));
+            nalSize = ntohl(nalSize);
+
+            status_t err = paramSets.addNalUnit(tmp + 4, nalSize);
+            if (err != OK) {
+                return ERROR_MALFORMED;
+            }
+
+            bytesLeft -= (nalSize + 4);
+            tmp += nalSize + 4;
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+        }
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+    } else {
+        while (bytesLeft > 4 && !memcmp("\x00\x00\x00\x01", tmp, 4)) {
+            nextStartCode = findNextNalStartCode(tmp + 4, bytesLeft - 4);
+            status_t err = paramSets.addNalUnit(tmp + 4, (nextStartCode - tmp) - 4);
+            if (err != OK) {
+                return ERROR_MALFORMED;
+            }
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+            // Move on to find the next parameter set
+            bytesLeft -= nextStartCode - tmp;
+            tmp = nextStartCode;
+        }
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
     }
 
     size_t csdSize = 23;
@@ -3596,7 +3741,9 @@ status_t MPEG4Writer::Track::makeHEVCCodecSpecificData(
     }
 
     // Data is in the form of HEVCCodecSpecificData
-    if (memcmp("\x00\x00\x00\x01", data, 4)) {
+// QTI_BEGIN: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
+    if (memcmp("\x00\x00\x00\x01", data, 4) && !mNalLengthBitstream) {
+// QTI_END: 2018-05-31: Video: libstagefirght: Add changes to handle multiple slices in writer
         return copyHEVCCodecSpecificData(data, size);
     }
 
@@ -3656,6 +3803,49 @@ status_t MPEG4Writer::Track::getDolbyVisionProfile() {
     return OK;
 }
 
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+uint32_t parseEscaped(ABitReader &br, uint32_t bits1 = 0,
+                      uint32_t bits2 = 0, uint32_t bits3 = 0) {
+  if (bits1 == 0)
+      return 0;
+
+  uint32_t value = br.getBits(bits1);
+  if (value == (1 << bits1) - 1) {
+      value += parseEscaped(br, bits2, bits3);
+  }
+  return value;
+}
+status_t MPEG4Writer::Track::parseMHASPackets(MediaBufferBase *buffer) {
+    const uint8_t* data = (const uint8_t*)buffer->data();
+    size_t size = buffer->size();
+    while (size > 1) {
+        ABitReader br(data, size);
+        uint32_t type = parseEscaped(br, 3, 8, 8);
+        uint32_t label = parseEscaped(br, 2, 8, 32);
+        uint32_t length = parseEscaped(br, 11, 24, 24);
+
+        ALOGV("parseMHASPacket type %u label %u length %u", type, label, length);
+
+        CHECK((br.numBitsLeft() % 8) == 0);
+        size_t headerLength = size - (br.numBitsLeft() / 8);
+
+        if (size < length + headerLength)
+            return ERROR_MALFORMED;
+
+        size -= headerLength;
+        data += headerLength;
+        if (!mGotAllCodecSpecificData && type == 0x01) {
+            copyCodecSpecificData(data, length);
+            mGotAllCodecSpecificData = true;
+        }
+
+        size -= length;
+        data += length;
+    }
+    return (size == 0) ? OK : ERROR_MALFORMED;
+}
+
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
 /*
  * Updates the drift time from the audio track so that
  * the video track can get the updated drift time information
@@ -3734,7 +3924,9 @@ status_t MPEG4Writer::Track::threadEntry() {
     status_t err = OK;
     MediaBufferBase *buffer;
     const char *trackName = getTrackType();
-    while (!mDone && (err = mSource->read(&buffer)) == OK) {
+// QTI_BEGIN: 2022-04-08: Audio: av: add support for compress audio recording
+    while (!mDone && (err = mSource->read(&buffer)) == OK && buffer != NULL) {
+// QTI_END: 2022-04-08: Audio: av: add support for compress audio recording
         ALOGV("read:buffer->range_length:%lld", (long long)buffer->range_length());
         int32_t isEOS = false;
         if (buffer->range_length() == 0) {
@@ -3919,6 +4111,18 @@ status_t MPEG4Writer::Track::threadEntry() {
         }
         ALOGV("sampleFileOffset:%lld", (long long)sampleFileOffset);
 
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+        if (mIsMPEGH && !mGotAllCodecSpecificData) {
+            err = parseMHASPackets(buffer);
+            if (OK != err || !mGotAllCodecSpecificData) {
+                buffer->release();
+                mSource->stop();
+                mIsMalformed = true;
+                break;
+            }
+        }
+
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
         /*
          * Reserve space in the file for the current sample + to be written MOOV box. If reservation
          * for a new sample fails, preAllocate(...) stops muxing session completely. Stop() could
@@ -4025,8 +4229,9 @@ status_t MPEG4Writer::Track::threadEntry() {
                     mFirstSampleStartOffsetUs = -timestampUs;
                     timestampUs = 0;
                 }
-                mOwner->setStartTimestampUs(timestampUs);
-                mStartTimestampUs = timestampUs;
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+                mOwner->setStartTimestampUs(timestampUs, &mStartTimestampUs);
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
                 previousPausedDurationUs = mStartTimestampUs;
             }
 
@@ -4355,8 +4560,14 @@ status_t MPEG4Writer::Track::threadEntry() {
     if (mIsAudio) {
         ALOGI("Audio track drift time: %" PRId64 " us", mOwner->getDriftTimeUs());
     }
-
-    if (err == ERROR_END_OF_STREAM) {
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
+    // if err is ERROR_IO (ex: during SSR), return OK to save the
+    // recorded file successfully. Session tear down will happen as part of
+    // client callback
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
+// QTI_BEGIN: 2018-04-20: Video: libstagefright: Handling SSR/Hardware error in Camcorder
+    if ((err == ERROR_IO) || (err == ERROR_END_OF_STREAM)) {
+// QTI_END: 2018-04-20: Video: libstagefright: Handling SSR/Hardware error in Camcorder
         return OK;
     }
     return err;
@@ -4527,7 +4738,11 @@ void MPEG4Writer::Track::bufferChunk(int64_t timestampUs) {
 }
 
 int64_t MPEG4Writer::Track::getDurationUs() const {
-    return mTrackDurationUs + getStartTimeOffsetTimeUs() + mOwner->getStartTimeOffsetBFramesUs();
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+    return mTrackDurationUs +
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+        mOwner->getStartTimeOffsetTimeUs(mStartTimestampUs) +
+        mOwner->getStartTimeOffsetBFramesUs();
 }
 
 int64_t MPEG4Writer::Track::getEstimatedTrackSizeBytes() const {
@@ -4598,6 +4813,9 @@ status_t MPEG4Writer::Track::checkCodecSpecificData() const {
     const char *mime;
     CHECK(mMeta->findCString(kKeyMIMEType, &mime));
     if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AAC, mime) ||
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+        !strcasecmp(MEDIA_MIMETYPE_AUDIO_MHAS, mime) ||
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_MPEG4, mime) ||
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_AVC, mime) ||
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_HEVC, mime) ||
@@ -4913,6 +5131,10 @@ void MPEG4Writer::Track::writeAudioFourCCBox() {
     } else if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AMR_NB, mime) ||
                !strcasecmp(MEDIA_MIMETYPE_AUDIO_AMR_WB, mime)) {
         writeDamrBox();
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+    } else if(!strcasecmp(MEDIA_MIMETYPE_AUDIO_MHAS, mime)) {
+        writeMhaCBox();
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
     }
     mOwner->endBox();
 }
@@ -5054,6 +5276,20 @@ void MPEG4Writer::Track::writeMp4vEsdsBox() {
 
     mOwner->endBox();  // esds
 }
+// QTI_BEGIN: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
+void MPEG4Writer::Track::writeMhaCBox() {
+    mOwner->beginBox("mhaC");
+    mOwner->writeInt8(0x01);          // version=1
+    mOwner->writeInt8(0x0D);          // profile level
+    mOwner->writeInt8(0x02);          // channel configuration
+
+    mOwner->writeInt16(mCodecSpecificDataSize); // config length
+
+    mOwner->write(mCodecSpecificData, mCodecSpecificDataSize);
+
+    mOwner->endBox();  // mhaC
+}
+// QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
 
 void MPEG4Writer::Track::writeTkhdBox(uint32_t now) {
     mOwner->beginBox("tkhd");
@@ -5138,14 +5374,14 @@ void MPEG4Writer::Track::writeHdlrBox() {
 
 void MPEG4Writer::Track::writeEdtsBox() {
     ALOGV("%s : getStartTimeOffsetTimeUs of track:%" PRId64 " us", getTrackType(),
-        getStartTimeOffsetTimeUs());
+        mOwner->getStartTimeOffsetTimeUs(mStartTimestampUs));
 
     int32_t mvhdTimeScale = mOwner->getTimeScale();
     ALOGV("mvhdTimeScale:%" PRId32, mvhdTimeScale);
     /* trackStartOffsetUs of this track is the sum of longest offset needed by a track among all
      * tracks with B frames in this movie and the start offset of this track.
      */
-    int64_t trackStartOffsetUs = getStartTimeOffsetTimeUs();
+    int64_t trackStartOffsetUs = mOwner->getStartTimeOffsetTimeUs(mStartTimestampUs);
     ALOGV("trackStartOffsetUs:%" PRIu64, trackStartOffsetUs);
 
     // Longest offset needed by a track among all tracks with B frames.
@@ -5440,18 +5676,11 @@ void MPEG4Writer::Track::writePaspBox() {
     }
 }
 
-int64_t MPEG4Writer::Track::getStartTimeOffsetTimeUs() const {
-    int64_t trackStartTimeOffsetUs = 0;
-    int64_t moovStartTimeUs = mOwner->getStartTimestampUs();
-    if (mStartTimestampUs != -1 && mStartTimestampUs != moovStartTimeUs) {
-        CHECK_GT(mStartTimestampUs, moovStartTimeUs);
-        trackStartTimeOffsetUs = mStartTimestampUs - moovStartTimeUs;
-    }
-    return trackStartTimeOffsetUs;
-}
-
 int32_t MPEG4Writer::Track::getStartTimeOffsetScaledTime() const {
-    return (getStartTimeOffsetTimeUs() * mTimeScale + 500000LL) / 1000000LL;
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+    return (mOwner->getStartTimeOffsetTimeUs(mStartTimestampUs) *
+                mTimeScale + 500000LL) / 1000000LL;
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
 }
 
 void MPEG4Writer::Track::writeSttsBox() {

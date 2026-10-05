@@ -12,6 +12,16 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+// QTI_BEGIN: 2023-05-31: Audio: APM: check and apply A2dpSuspended param
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+// QTI_END: 2023-05-31: Audio: APM: check and apply A2dpSuspended param
+// QTI_BEGIN: 2024-04-09: Audio: audiopolicy: check for spatialization before direct PCM
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+// QTI_END: 2024-04-09: Audio: audiopolicy: check for spatialization before direct PCM
+// QTI_BEGIN: 2023-05-31: Audio: APM: check and apply A2dpSuspended param
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+// QTI_END: 2023-05-31: Audio: APM: check and apply A2dpSuspended param
  */
 
 #define LOG_TAG "APM_AudioPolicyManager"
@@ -84,6 +94,44 @@ using content::AttributionSourceState;
 // media / notification / system volume.
 constexpr float IN_CALL_EARPIECE_HEADROOM_DB = 3.f;
 
+// QTI_BEGIN: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
+static constexpr unsigned int kWmaStandardFrequencies = 7;
+static constexpr unsigned int kWmaStandardChannels = 2;
+static constexpr unsigned int kWmaProMaxBitrate = 1536000;
+static constexpr unsigned int kWmaLosslessMaxBitrate = 1152000;
+
+static const uint32_t kWMASupportedSampleRates[kWmaStandardFrequencies] =
+{
+    8000, 11025, 16000, 22050, 32000, 44100, 48000
+};
+
+static const uint32_t kWMASupportedMinByteRates[kWmaStandardFrequencies][kWmaStandardChannels] =
+{
+    {128, 12000},
+    {8016, 8016},
+    {10000, 16000},
+    {16016, 20008},
+    {20000, 24000},
+    {20008, 31960},
+    {63000, 63000}
+};
+
+static const uint32_t kWMASupportedMaxByteRates[kWmaStandardFrequencies][kWmaStandardChannels] =
+{
+    {8000, 12000},
+    {10168, 10168},
+    {16000, 20000},
+    {20008, 32048},
+    {20000, 48000},
+    {48024, 320032},
+// QTI_END: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
+// QTI_BEGIN: 2021-04-21: Audio: audiopolicy: Fix WMA 48k offload path issue
+    {256008, 256008}
+// QTI_END: 2021-04-21: Audio: audiopolicy: Fix WMA 48k offload path issue
+// QTI_BEGIN: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
+};
+
+// QTI_END: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
 
 // ----------------------------------------------------------------------------
 // AudioPolicyInterface implementation
@@ -1067,6 +1115,26 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
     // check for device and output changes triggered by new phone state
     checkForDeviceAndOutputChanges();
 
+// QTI_BEGIN: 2021-02-02: Audio: audiopolicy: Enable DSD voice concurrency.
+    sp<SwAudioOutputDescriptor> outputDesc;
+    bool voiceDSDConcurrency = property_get_bool("vendor.voice.dsd.playback.conc.disabled", true );
+    if (voiceDSDConcurrency) {
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            outputDesc = mOutputs.valueAt(i);
+            if (outputDesc != nullptr && outputDesc->mProfile != nullptr &&
+                (outputDesc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) &&
+                (outputDesc->getFormat() == AUDIO_FORMAT_DSD)) {
+                ALOGD("voice_conc:calling closeOutput on call mode for DSD COMPRESS output");
+                closeOutput(mOutputs.keyAt(i));
+                // call invalidate for music, so that DSD compress will fallback to deep-buffer.
+// QTI_END: 2021-02-02: Audio: audiopolicy: Enable DSD voice concurrency.
+                invalidateStreams({AUDIO_STREAM_MUSIC});
+// QTI_BEGIN: 2021-02-02: Audio: audiopolicy: Enable DSD voice concurrency.
+            }
+        }
+    }
+
+// QTI_END: 2021-02-02: Audio: audiopolicy: Enable DSD voice concurrency.
     int delayMs = 0;
     if (isStateInCall(state)) {
         nsecs_t sysTime = systemTime();
@@ -1470,9 +1538,11 @@ status_t AudioPolicyManager::getOutputForAttrInt(
                         audio_channel_count_from_out_mask(config->channel_mask));
         if (policyMixDevice != nullptr && (tryDirectForFlags || tryDirectForChannelMask)) {
             audio_io_handle_t newOutput;
+            audio_output_flags_t directFlags =
+                    static_cast<audio_output_flags_t>(*flags | AUDIO_OUTPUT_FLAG_DIRECT);
             status = openDirectOutput(
                     *stream, session, config,
-                    (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_DIRECT),
+                    &directFlags,
                     DeviceVector(policyMixDevice), &newOutput, *resultAttr);
             if (status == NO_ERROR) {
                 policyDesc = mOutputs.valueFor(newOutput);
@@ -1725,7 +1795,7 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
 status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
                                               audio_session_t session,
                                               const audio_config_t *config,
-                                              audio_output_flags_t flags,
+                                              audio_output_flags_t *flags,
                                               const DeviceVector &devices,
                                               audio_io_handle_t *output,
                                               audio_attributes_t attributes) {
@@ -1734,7 +1804,7 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
 
     // skip direct output selection if the request can obviously be attached to a mixed output
     // and not explicitly requested
-    if (((flags & AUDIO_OUTPUT_FLAG_DIRECT) == 0) &&
+    if (((*flags & AUDIO_OUTPUT_FLAG_DIRECT) == 0) &&
             audio_is_linear_pcm(config->format) && config->sample_rate <= SAMPLE_RATE_HZ_MAX &&
             audio_channel_count_from_out_mask(config->channel_mask) <= 2) {
         return NAME_NOT_FOUND;
@@ -1743,24 +1813,34 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     // Reject flag combinations that do not make sense. Note that the requested flags might not
     // have the 'DIRECT' flag set, however once a direct-capable profile is found, it will
     // combine the requested flags with its own flags, yielding an unsupported combination.
-    if ((flags & AUDIO_OUTPUT_FLAG_DEEP_BUFFER) != 0) {
-        return NAME_NOT_FOUND;
-    }
+    audio_output_flags_t directFlags =
+            static_cast<audio_output_flags_t>(*flags & ~AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
 
     // Do not allow offloading if one non offloadable effect is enabled or MasterMono is enabled.
     // This prevents creating an offloaded track and tearing it down immediately after start
     // when audioflinger detects there is an active non offloadable effect.
     sp<IOProfile> profile;
-    if (((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0) ||
+// QTI_BEGIN: 2025-02-02: Audio: audiopolicy: Allow MMap when global effects are enabled
+    if ((((directFlags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD)) == 0) &&
+            directFlags != AUDIO_OUTPUT_FLAG_DIRECT) ||
+// QTI_END: 2025-02-02: Audio: audiopolicy: Allow MMap when global effects are enabled
             !(mEffects.isNonOffloadableEffectEnabled(session) || mMasterMono)) {
         profile = getProfileForOutput(
                 devices, config->sample_rate, config->format, config->channel_mask,
-                flags, true /* directOnly */);
+                directFlags, true /* directOnly */);
     }
 
     if (profile == nullptr) {
         return NAME_NOT_FOUND;
     }
+// QTI_BEGIN: 2021-01-27: Audio: audiopolicy: Add support for multipleOffload.
+    if (!(directFlags & AUDIO_OUTPUT_FLAG_DIRECT) &&
+         (profile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT)) {
+        ALOGI("%s rejecting direct profile as was not requested ", __func__);
+        profile = nullptr;
+        return NAME_NOT_FOUND;
+    }
+// QTI_END: 2021-01-27: Audio: audiopolicy: Add support for multipleOffload.
 
     // exclusive outputs for MMAP and Offload are enforced by different session ids.
     for (size_t i = 0; i < mOutputs.size(); i++) {
@@ -1789,6 +1869,12 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
             ALOGW("%s profile %s can't open new mmap output maxOpenCount reached", __func__,
                   profile->getName().c_str());
             return NAME_NOT_FOUND;
+// QTI_BEGIN: 2024-07-14: Audio: audiopolicy: Fix direct pcm behavior when 2 direct tracks are played
+        } else if (profile->getFlags() == AUDIO_OUTPUT_FLAG_DIRECT) {
+            ALOGW("%s profile %s can't open new direct pcm output for session %d"
+                   " maxOpenCount reached", __func__, profile->getName().c_str(), session);
+             return NAME_NOT_FOUND;
+// QTI_END: 2024-07-14: Audio: audiopolicy: Fix direct pcm behavior when 2 direct tracks are played
         } else {
             // Close outputs on this profile, if available, to free resources for this request
             for (int i = 0; i < mOutputs.size() && !profile->canOpenNewIo(); i++) {
@@ -1816,13 +1902,13 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     releaseMsdOutputPatches(devices);
 
     status_t status =
-            outputDesc->open(config, nullptr /* mixerConfig */, devices, stream, &flags, output,
-                             attributes);
+            outputDesc->open(config, nullptr /* mixerConfig */, devices, stream, &directFlags,
+                             output, attributes);
 
     // only accept an output with the requested parameters, unless the format can be IEC61937
     // encapsulated and opened by AudioFlinger as wrapped IEC61937.
     const bool ignoreRequestedParametersCheck = audio_is_iec61937_compatible(config->format)
-            && (flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)
+            && (directFlags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)
             && audio_has_proportional_frames(outputDesc->getFormat());
     if (status != NO_ERROR ||
         (!ignoreRequestedParametersCheck &&
@@ -1856,6 +1942,7 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     mPreviousOutputs = mOutputs;
     ALOGV("%s returns new direct output %d", __func__, *output);
     mpClientInterface->onAudioPortListUpdate();
+    *flags = directFlags;
     return NO_ERROR;
 }
 
@@ -1889,15 +1976,38 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
 
     audio_stream_type_t stream = mEngine->getStreamTypeForAttributes(*attr);
 
+// QTI_BEGIN: 2021-10-06: Audio: audiopolicy: Fix direct flag selection logic
+    const bool offloadDisable =
+            property_get_bool("audio.offload.disable", false /* default_value */);
+// QTI_END: 2021-10-06: Audio: audiopolicy: Fix direct flag selection logic
+// QTI_BEGIN: 2025-03-19: Audio: audiopolicy: Remove customization to internally use direct pcm
+    if ((offloadDisable || stream != AUDIO_STREAM_MUSIC) &&
+        (audio_is_linear_pcm(config->format) && *flags == AUDIO_OUTPUT_FLAG_DIRECT)) {
+        ALOGV("%s Remove direct flags stream %d,orginal flags %0x, offload disabled %d ", __func__,
+              stream, *flags, offloadDisable);
+// QTI_END: 2025-03-19: Audio: audiopolicy: Remove customization to internally use direct pcm
+// QTI_BEGIN: 2021-10-06: Audio: audiopolicy: Fix direct flag selection logic
+        *flags = AUDIO_OUTPUT_FLAG_NONE;
+// QTI_END: 2021-10-06: Audio: audiopolicy: Fix direct flag selection logic
+    }
+
+// QTI_BEGIN: 2021-01-27: Audio: audiopolicy: Force deep-buffer for media.
+    bool forceDeepBuffer = false;
+// QTI_END: 2021-01-27: Audio: audiopolicy: Force deep-buffer for media.
     // only allow deep buffering for music stream type
     if (stream != AUDIO_STREAM_MUSIC) {
         *flags = (audio_output_flags_t)(*flags &~AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
-    } else if (/* stream == AUDIO_STREAM_MUSIC && */
-            *flags == AUDIO_OUTPUT_FLAG_NONE && mConfig->useDeepBufferForMedia()
-            && audio_channel_count_from_out_mask(config->channel_mask) == 2
-            && config->sample_rate <= SAMPLE_RATE_HZ_MAX) {
+// QTI_BEGIN: 2021-01-27: Audio: audiopolicy: Force deep-buffer for media.
+    } else if ((*flags == AUDIO_OUTPUT_FLAG_NONE || *flags == AUDIO_OUTPUT_FLAG_DIRECT ||
+                (*flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD)) && !isInCall() &&
+// QTI_END: 2021-01-27: Audio: audiopolicy: Force deep-buffer for media.
+// QTI_BEGIN: 2024-12-26: Audio: audiopolicy : Fix force deep buffer condition
+                mConfig->useDeepBufferForMedia()) {
+// QTI_END: 2024-12-26: Audio: audiopolicy : Fix force deep buffer condition
         // use DEEP_BUFFER as default output for music stream type
-        *flags = (audio_output_flags_t)AUDIO_OUTPUT_FLAG_DEEP_BUFFER;
+// QTI_BEGIN: 2021-01-27: Audio: audiopolicy: Force deep-buffer for media.
+        forceDeepBuffer = true;
+// QTI_END: 2021-01-27: Audio: audiopolicy: Force deep-buffer for media.
     }
     if (stream == AUDIO_STREAM_TTS) {
         *flags = AUDIO_OUTPUT_FLAG_TTS;
@@ -1933,7 +2043,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     audio_config_t directConfig = *config;
     directConfig.channel_mask = channelMask;
 
-    status_t status = openDirectOutput(stream, session, &directConfig, *flags, devices, &output,
+    status_t status = openDirectOutput(stream, session, &directConfig, flags, devices, &output,
                                        *attr);
     if (status != NAME_NOT_FOUND) {
         return output;
@@ -1986,6 +2096,10 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
             // at this stage we should ignore the DIRECT flag as no direct output could be
             // found earlier
             *flags = (audio_output_flags_t) (*flags & ~AUDIO_OUTPUT_FLAG_DIRECT);
+            *flags = forceDeepBuffer ? AUDIO_OUTPUT_FLAG_DEEP_BUFFER :
+                    (*flags == AUDIO_OUTPUT_FLAG_NONE) ? AUDIO_OUTPUT_FLAG_PRIMARY : *flags;
+            ALOGV("%s forced deep-buffer (%s) flags (%0x)", __func__,
+                    forceDeepBuffer ? "yes": "no" , *flags);
             // If the preferred mixer attributes is null, do not select the bit-perfect output
             // unless the bit-perfect output is the only output.
             // The bit-perfect output can exist while the passed in preferred mixer attributes
@@ -4218,6 +4332,9 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
         audio_io_handle_t outputSpatializer = AUDIO_IO_HANDLE_NONE;
         audio_io_handle_t outputDeepBuffer = AUDIO_IO_HANDLE_NONE;
         audio_io_handle_t outputPrimary = AUDIO_IO_HANDLE_NONE;
+// QTI_BEGIN: 2024-12-26: Audio: audiopolicy: Fix behavior of selectOutputForMusicEffects
+        audio_io_handle_t outputDirect = AUDIO_IO_HANDLE_NONE;
+// QTI_END: 2024-12-26: Audio: audiopolicy: Fix behavior of selectOutputForMusicEffects
 
         for (audio_io_handle_t outputLoop : outputs) {
             sp<SwAudioOutputDescriptor> desc = mOutputs.valueFor(outputLoop);
@@ -4234,6 +4351,13 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
                     outputSpatializer = outputLoop;
                 }
             }
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+            if ((desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) != 0) {
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
+// QTI_BEGIN: 2024-12-26: Audio: audiopolicy: Fix behavior of selectOutputForMusicEffects
+                outputDirect = outputLoop;
+// QTI_END: 2024-12-26: Audio: audiopolicy: Fix behavior of selectOutputForMusicEffects
+            }
             if ((desc->mFlags & AUDIO_OUTPUT_FLAG_DEEP_BUFFER) != 0) {
                 outputDeepBuffer = outputLoop;
             }
@@ -4245,6 +4369,10 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
             output = outputOffloaded;
         } else if (outputSpatializer != AUDIO_IO_HANDLE_NONE) {
             output = outputSpatializer;
+// QTI_BEGIN: 2024-12-26: Audio: audiopolicy: Fix behavior of selectOutputForMusicEffects
+        } else if (outputDirect != AUDIO_IO_HANDLE_NONE) {
+             output = outputDirect;
+// QTI_END: 2024-12-26: Audio: audiopolicy: Fix behavior of selectOutputForMusicEffects
         } else if (outputDeepBuffer != AUDIO_IO_HANDLE_NONE) {
             output = outputDeepBuffer;
         } else if (outputPrimary != AUDIO_IO_HANDLE_NONE) {
@@ -5180,6 +5308,11 @@ audio_offload_mode_t AudioPolicyManager::getOffloadSupport(const audio_offload_i
         return AUDIO_OFFLOAD_NOT_SUPPORTED;
     }
 
+// QTI_BEGIN: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
+    if (!isOffloadSupportedInternal(offloadInfo)) {
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
+    }
+// QTI_END: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
     // See if there is a profile to support this.
     // AUDIO_DEVICE_NONE
     sp<IOProfile> profile = getProfileForOutput(DeviceVector() /*ignore device */,
@@ -5200,6 +5333,69 @@ audio_offload_mode_t AudioPolicyManager::getOffloadSupport(const audio_offload_i
     return AUDIO_OFFLOAD_SUPPORTED;
 }
 
+// QTI_BEGIN: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
+bool AudioPolicyManager::isOffloadSupportedInternal(const audio_offload_info_t& offloadInfo)
+{
+    const bool audioExtensionFormatsEnabled =
+            property_get_bool("vendor.audio.extn.formats", true /* default_value */);
+    if (audioExtensionFormatsEnabled) {
+        const audio_format_t audioFormat = audio_get_main_format(offloadInfo.format);
+        if (property_get_bool("vendor.voice.dsd.playback.conc.disabled", true) &&
+            isInCall() && (audioFormat == AUDIO_FORMAT_DSD)) {
+            ALOGD("%s, Offload denied for DSD as in call", __func__);
+            return false;
+        }
+        int channelCount = popcount(offloadInfo.channel_mask);
+        if (channelCount > 2) {
+            if (audioFormat == AUDIO_FORMAT_FLAC || audioFormat == AUDIO_FORMAT_AAC_ADTS ||
+                audioFormat == AUDIO_FORMAT_AAC || audioFormat == AUDIO_FORMAT_VORBIS) {
+                ALOGD("%s, Offload denied for format %0x, channels %d",
+                        __func__, audioFormat, channelCount);
+                return false;
+            }
+            if (offloadInfo.sample_rate > 48000 &&
+                (audioFormat == AUDIO_FORMAT_ALAC || audioFormat == AUDIO_FORMAT_WMA ||
+                audioFormat == AUDIO_FORMAT_WMA_PRO)) {
+                ALOGD("%s, Offload denied for format %0x, channels %d, samplerate %d",
+                        __func__, audioFormat, channelCount, offloadInfo.sample_rate);
+                return false;
+            }
+        }
+        // check against wma std bit rate restriction
+        if (audioFormat == AUDIO_FORMAT_WMA) {
+            int32_t srIndex = -1;
+            for (int i = 0; i < kWmaStandardFrequencies; i++) {
+                if (offloadInfo.sample_rate == kWMASupportedSampleRates[i]) {
+                    srIndex = i;
+                    break;
+                }
+            }
+            if (srIndex < 0 || channelCount > 2 || channelCount <= 0) {
+                ALOGD("%s,Offload denied for WMA, invalid sampleRate/channelCount", __func__);
+                return false;
+            }
+
+            uint32_t minBitRate = kWMASupportedMinByteRates[srIndex][channelCount - 1];
+            uint32_t maxBitRate = kWMASupportedMaxByteRates[srIndex][channelCount - 1];
+            if ((offloadInfo.bit_rate > maxBitRate) || (offloadInfo.bit_rate < minBitRate)) {
+                ALOGD("%s Offload denied for WMA unsupported bitRate %d, maxBitRate %d,"
+                        "minBitRate%d", __func__, offloadInfo.bit_rate, maxBitRate, minBitRate);
+                return false;
+            }
+        }
+
+        // Safely choose the min bitrate as threshold and leave the restriction to NT decoder
+        // as we can't distinguish wma pro and wma lossless here.
+        if (audioFormat == AUDIO_FORMAT_WMA_PRO && (offloadInfo.bit_rate > kWmaProMaxBitrate ||
+                offloadInfo.bit_rate > kWmaLosslessMaxBitrate)) {
+            ALOGD("%s offload disabled for WMA_PRO/WMA_LOSSLESS bit rate exceeding", __func__);
+            return false;
+        }
+    }
+    return true;
+}
+
+// QTI_END: 2021-02-03: Audio: audiopolicy: add more conditions for getOffloadSupport.
 bool AudioPolicyManager::isDirectOutputSupported(const audio_config_base_t& config,
                                                  const audio_attributes_t& attributes) {
     audio_output_flags_t output_flags = AUDIO_OUTPUT_FLAG_NONE;
@@ -6601,7 +6797,10 @@ status_t AudioPolicyManager::setMasterMono(bool mono)
         std::vector<audio_io_handle_t> offloaded;
         for (size_t i = 0; i < mOutputs.size(); ++i) {
             sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-            if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+            if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD ||
+                desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
                 offloaded.push_back(desc->mIoHandle);
             }
         }
@@ -8003,11 +8202,30 @@ void AudioPolicyManager::clearAudioSourcesForOutput(audio_io_handle_t output)
     }
 }
 
+bool AudioPolicyManager::isInvalidationOfMusicStreamNeeded(const audio_attributes_t &attr, uid_t uid)
+// QTI_BEGIN: 2021-02-23: Audio: audiopolicy: update invalidation logic.
+{
+// QTI_END: 2021-02-23: Audio: audiopolicy: update invalidation logic.
+    if (followsSameRouting(uid, attr, uid, attributes_initializer(AUDIO_USAGE_MEDIA))) {
+// QTI_BEGIN: 2021-02-23: Audio: audiopolicy: update invalidation logic.
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            sp<SwAudioOutputDescriptor> newOutputDesc = mOutputs.valueAt(i);
+            if (newOutputDesc->getFormat() == AUDIO_FORMAT_DSD)
+                return false;
+        }
+    }
+    return true;
+}
+// QTI_END: 2021-02-23: Audio: audiopolicy: update invalidation logic.
 void AudioPolicyManager::checkOutputForStrategy(const product_strategy_t psId)
 {
     auto user = mEngine->getUserIdForProductStrategy(psId);
     auto uid = multiuser_get_uid(user, /* app_id=*/ 0);
     auto attr = mEngine->getAllAttributesForProductStrategy(psId).front();
+    if (!isInvalidationOfMusicStreamNeeded(attr, uid))
+// QTI_BEGIN: 2021-02-23: Audio: audiopolicy: update invalidation logic.
+        return;
+// QTI_END: 2021-02-23: Audio: audiopolicy: update invalidation logic.
     auto oldDevices = mEngine->getOutputDevicesForStrategy(psId, 0, true /*fromCache*/);
     auto newDevices = mEngine->getOutputDevicesForStrategy(psId, 0, false /*fromCache*/);
 
@@ -8821,8 +9039,9 @@ bool AudioPolicyManager::shouldBeSpatialized(const audio_attributes_t *attr,
                                              audio_session_t session,
                                              const sp<PreferredMixerAttributesInfo>& mixConfInfo) {
     if (mSpatializerOutput != nullptr && canBeSpatializedInt(attr, config, devices)
-            && ((flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0)
-            && checkHapticCompatibilityOnSpatializerOutput(config, session)
+            && ((((flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0)
+            && checkHapticCompatibilityOnSpatializerOutput(config, session))
+                         || audio_is_linear_pcm(config->format))
             && mixConfInfo == nullptr) {
         return true;
     }

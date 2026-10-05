@@ -566,6 +566,9 @@ private:
     static VideoEncoderCap* createDefaultH263VideoEncoderCap();
     static VideoEncoderCap* createDefaultM4vVideoEncoderCap();
     static AudioEncoderCap* createDefaultAmrNBEncoderCap();
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+    static AudioEncoderCap* createDefaultLpcmEncoderCap();
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
 
     static int findTagForName(const NameToTagMap *map, size_t nMappings, const char *name);
 

@@ -1516,11 +1516,11 @@ status_t ThreadBase::checkEffectCompatibility_l(
         }
     } break;
     case DIRECT:
-        // Reject any effect on Direct output threads for now, since the format of
-        // mSinkBuffer is not guaranteed to be compatible with effect processing (PCM 16 stereo).
-        ALOGW("%s: effect %s on DIRECT output thread %s",
-                __func__, desc->name, mThreadName);
-        return BAD_VALUE;
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+        // Treat direct threads similar to offload threads,
+        // since mixing and post processing should be done by DSP here as well.
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
+        break;
     case DUPLICATING:
         if (audio_is_global_session(sessionId)) {
             ALOGW("%s: global effect %s on DUPLICATING thread %s",
@@ -1784,7 +1784,7 @@ std::vector<audio_port_handle_t> ThreadBase::invalidateTracksForPid_l(pid_t pid)
 }
 
 void ThreadBase::onEffectEnable(const sp<IAfEffectModule>& effect) {
-    if (isOffloadOrMmap()) {
+    if (isOffloadOrMmap() || mType == DIRECT) {
         audio_utils::lock_guard _l(mutex());
         broadcast_l();
     }
@@ -1801,7 +1801,7 @@ void ThreadBase::onEffectEnable(const sp<IAfEffectModule>& effect) {
 }
 
 void ThreadBase::onEffectDisable([[maybe_unused]] const sp<IAfEffectModule>& effect) {
-    if (isOffloadOrMmap()) {
+    if (isOffloadOrMmap() || mType == DIRECT) {
         audio_utils::lock_guard _l(mutex());
         broadcast_l();
     }
@@ -1836,7 +1836,7 @@ status_t ThreadBase::addEffect_ll(const sp<IAfEffectModule>& effect)
     sp<IAfEffectChain> chain = getEffectChain_l(sessionId);
     bool chainCreated = false;
 
-    ALOGD_IF(mIsOffload && !effect->isOffloadable(),
+    ALOGD_IF((mIsOffload || mType == DIRECT) && !effect->isOffloadable(),
              "%s: on offload thread(%d): effect %s does not support offload flags %#x",
              __func__, mId, effect->desc().name, effect->desc().flags);
 
@@ -1856,7 +1856,7 @@ status_t ThreadBase::addEffect_ll(const sp<IAfEffectModule>& effect)
         return BAD_VALUE;
     }
 
-    effect->setOffloaded_l(mIsOffload, mId);
+    effect->setOffloaded_l(mIsOffload || mType == DIRECT, mId);
 
     status_t status = chain->addEffect(effect);
     if (status != NO_ERROR) {
@@ -4417,7 +4417,9 @@ NO_THREAD_SAFETY_ANALYSIS  // manual locking of AudioFlinger
             }
 
             // only process effects if we're going to write
-            if (mSleepTimeUs == 0 && mType != OFFLOAD) {
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+            if (mSleepTimeUs == 0 && mType != OFFLOAD && mType != DIRECT) {
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
                 for (size_t i = 0; i < effectChains.size(); i ++) {
                     effectChains[i]->process_l();
                     // TODO: Write haptic data directly to sink buffer when mixing.
@@ -4448,7 +4450,9 @@ NO_THREAD_SAFETY_ANALYSIS  // manual locking of AudioFlinger
         // was read from audio track: process only updates effect state
         // and thus does have to be synchronized with audio writes but may have
         // to be called while waiting for async write callback
-        if (mType == OFFLOAD) {
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+        if (mType == OFFLOAD || mType == DIRECT) {
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
             for (size_t i = 0; i < effectChains.size(); i ++) {
                 effectChains[i]->process_l();
             }
@@ -5031,6 +5035,12 @@ status_t PlaybackThread::createAudioPatch_l(const struct audio_patch *patch,
     mPatch = *patch;
     mOutDeviceTypeAddrs = deviceTypeAddrs;
 
+// QTI_BEGIN: 2022-10-06: Audio: audioflinger: Fix device routing metadata
+    // Force meteadata update before a route change
+    mActiveTracks.setHasChanged();
+    updateMetadata_l();
+
+// QTI_END: 2022-10-06: Audio: audioflinger: Fix device routing metadata
     if (mOutput->audioHwDev->supportsAudioPatches()) {
         const sp<DeviceHalInterface>& hwDevice = mOutput->audioHwDev->hwDevice();
         status = hwDevice->createAudioPatch(patch->num_sources,
@@ -5063,9 +5073,6 @@ status_t PlaybackThread::createAudioPatch_l(const struct audio_patch *patch,
     if (configChanged) {
         sendIoConfigEvent_l(AUDIO_OUTPUT_CONFIG_CHANGED);
     }
-    // Force metadata update after a route change
-    mActiveTracks.setHasChanged();
-
     return status;
 }
 
@@ -5096,6 +5103,12 @@ status_t PlaybackThread::releaseAudioPatch_l(const audio_patch_handle_t handle)
 
     mOutDeviceTypeAddrs.clear();
 
+// QTI_BEGIN: 2022-10-06: Audio: audioflinger: Fix device routing metadata
+    // Force meteadata update before a route change
+    mActiveTracks.setHasChanged();
+    updateMetadata_l();
+
+// QTI_END: 2022-10-06: Audio: audioflinger: Fix device routing metadata
     if (mOutput->audioHwDev->supportsAudioPatches()) {
         const sp<DeviceHalInterface>& hwDevice = mOutput->audioHwDev->hwDevice();
         status = hwDevice->releaseAudioPatch(handle);
@@ -5110,9 +5123,6 @@ status_t PlaybackThread::releaseAudioPatch_l(const audio_patch_handle_t handle)
         ALOGD("%s: suspending output on released patch %d", __func__, handle);
         suspend();
     }
-
-    // Force meteadata update after a route change
-    mActiveTracks.setHasChanged();
 
     return status;
 }
@@ -6822,6 +6832,11 @@ DirectOutputThread::DirectOutputThread(const sp<IAfThreadCallback>& afThreadCall
         AudioStreamOut* output, audio_io_handle_t id, ThreadBase::type_t type, bool systemReady,
         const audio_offload_info_t& offloadInfo)
     :   PlaybackThread(afThreadCallback, output, id, type, systemReady)
+        , mVolumeShaperActive(false)
+        , mFramesWrittenAtStandby(0)
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+        , mFramesWrittenForSleep(0)
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
 {
     mOffloadInfo = offloadInfo;
     setMasterBalance(afThreadCallback->getMasterBalance_l());
@@ -7131,6 +7146,9 @@ PlaybackThread::mixer_state DirectOutputThread::prepareTracks_l(
                     }
                     if (track->isStopped()) {
                         track->reset();
+// QTI_BEGIN: 2018-10-22: Audio: Avoid presentationComplete loop when hardware is paused
+                        mFlushPending = true;
+// QTI_END: 2018-10-22: Audio: Avoid presentationComplete loop when hardware is paused
                     }
                     tracksToRemove->push_back(track);
                 }
@@ -7263,10 +7281,24 @@ void DirectOutputThread::threadLoop_exit()
 // must be called with thread mutex locked
 bool DirectOutputThread::shouldStandby_l()
 {
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    bool standbyForDirectPcm = false;
+    bool standbyWhenIdle = false;
+
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
     bool trackPaused = false;
     bool trackStopped = false;
     bool trackDisabled = false;
 
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    if (mStandby) {
+        return false; // already in standby
+    }
+
+    // allowing DIRECT linear pcm track to be in standby even when active
+    standbyForDirectPcm = (mType == DIRECT) && audio_is_linear_pcm(mFormat) && !usesHwAvSync();
+
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
     // do not put the HAL in standby when paused. NuPlayer clear the offloaded AudioTrack
     // after a timeout and we will enter standby then.
     // On offload threads, do not enter standby if the main track is still underrunning.
@@ -7279,7 +7311,22 @@ bool DirectOutputThread::shouldStandby_l()
         trackDisabled = (mType == OFFLOAD) && mainTrack->isDisabled();
     }
 
-    return !mStandby && !(trackPaused || (mHwPaused && !trackStopped) || trackDisabled);
+    standbyWhenIdle = trackStopped || (!trackPaused && !mHwPaused) || trackDisabled;
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    // store position when entering standby in idle/stopped state for DIRECT linear pcm tracks.
+    // This is required because presentation position for a DIRECT linear pcm track is not reset
+    // on standby, and must be reset on track stop.
+    if (standbyForDirectPcm && standbyWhenIdle) {
+        uint64_t position64;
+        struct timespec ts;
+        if (NO_ERROR == mOutput->getPresentationPosition(&position64, &ts)) {
+            mFramesWrittenAtStandby = position64;
+            // reset mFramesWrittenForSleep as mFramesWrittenAtStandby includes it
+            mFramesWrittenForSleep = 0;
+        }
+    }
+    return standbyForDirectPcm || standbyWhenIdle;
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
 }
 
 // checkForNewParameter_l() must be called with ThreadBase::mutex() held
@@ -7369,6 +7416,10 @@ void DirectOutputThread::cacheParameters_l()
         mStandbyDelayNs = 0;
     } else if (mType == OFFLOAD) {
         mStandbyDelayNs = kOffloadStandbyDelayNs;
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    } else if (mType == DIRECT) {
+        mStandbyDelayNs = kOffloadStandbyDelayNs;
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
     } else {
         mStandbyDelayNs = microseconds(mActiveSleepTimeUs*2);
     }
@@ -7378,7 +7429,15 @@ void DirectOutputThread::flushHw_l()
 {
     PlaybackThread::flushHw_l();
     mOutput->flush();
+    mHwPaused = false;
     mFlushPending = false;
+// QTI_BEGIN: 2019-10-21: Audio: audioflinger: reset frames written at the time of flush for direct outputs.
+    mFramesWritten = 0;
+// QTI_END: 2019-10-21: Audio: audioflinger: reset frames written at the time of flush for direct outputs.
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    mFramesWrittenAtStandby = 0;
+    mFramesWrittenForSleep = 0;
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
     mTimestampVerifier.discontinuity(discontinuityForStandbyOrFlush());
     mTimestamp.clear();
     mMonotonicFrameCounter.onFlush();
@@ -7386,6 +7445,25 @@ void DirectOutputThread::flushHw_l()
     // Note: the client track in Tracks.cpp and AudioTrack.cpp
     // has a FLUSHED state but the DirectOutputThread does not;
     // those tracks will continue to show isStopped().
+}
+
+status_t DirectOutputThread::getTimestamp_l(AudioTimestamp& timestamp)
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+{
+    if (mOutput != NULL) {
+        uint64_t position64;
+        if (mOutput->getPresentationPosition(&position64, &timestamp.mTime) == OK) {
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
+// QTI_BEGIN: 2019-04-02: Audio: audioflinger: fix sub-overflow detected by ubsan
+            timestamp.mPosition = (position64 <= (mFramesWrittenAtStandby + mFramesWrittenForSleep)) ?
+                   0 : (uint32_t) (position64 - mFramesWrittenAtStandby - mFramesWrittenForSleep);
+// QTI_END: 2019-04-02: Audio: audioflinger: fix sub-overflow detected by ubsan
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+            return NO_ERROR;
+        }
+    }
+    return INVALID_OPERATION;
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
 }
 
 int64_t DirectOutputThread::computeWaitTimeNs_l() const {

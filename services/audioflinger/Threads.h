@@ -1277,7 +1277,7 @@ public:
                     return mMixerChannelMask;
                 }
 
-    status_t getTimestamp_l(AudioTimestamp& timestamp) final
+    virtual status_t getTimestamp_l(AudioTimestamp& timestamp)
             REQUIRES(mutex(), ThreadBase_ThreadLoop);
 
     void addPatchTrack(const sp<IAfPatchTrack>& track) final EXCLUDES_ThreadBase_Mutex;
@@ -1885,6 +1885,12 @@ protected:
     float                   mMasterBalanceLeft = 1.f;
     float                   mMasterBalanceRight = 1.f;
 
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    uint64_t                mFramesWrittenAtStandby;// used to reset frames on track reset
+    uint64_t                mFramesWrittenForSleep; // used to reset frames on track removal
+                                                    // or underrun before entering standby
+
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
 public:
     virtual     bool        hasFastMixer() const { return false; }
 
@@ -1906,6 +1912,9 @@ public:
                     }
                     return INVALID_OPERATION;
                 }
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    virtual     status_t    getTimestamp_l(AudioTimestamp& timestamp) override;
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
 };
 
 class OffloadThread : public DirectOutputThread {

@@ -25,6 +25,7 @@
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/rtsp/MyHandler.h>
 #include <media/stagefright/rtsp/SDPLoader.h>
+#include <mediaplayerservice/AVMediaServiceExtensions.h>
 #include <mpeg2ts/AnotherPacketSource.h>
 
 namespace android {
@@ -640,8 +641,11 @@ void NuPlayer::RTSPSource::onMessageReceived(const sp<AMessage> &msg) {
                 if (!info->mNPTMappingValid) {
                     // This is a live stream, we didn't receive any normal
                     // playtime mapping. We won't map to npt time.
-                    source->queueAccessUnit(accessUnit);
-                    break;
+                    if (!AVMediaServiceUtils::get()->checkNPTMapping(&info->mRTPTime,
+                            &info->mNormalPlaytimeUs, &info->mNPTMappingValid, rtpTime)) {
+                        source->queueAccessUnit(accessUnit);
+                        break;
+                    }
                 }
 
                 int64_t nptUs =
@@ -721,6 +725,14 @@ void NuPlayer::RTSPSource::onMessageReceived(const sp<AMessage> &msg) {
         case SDPLoader::kWhatSDPLoaded:
         {
             onSDPLoaded(msg);
+            break;
+        }
+
+        case MyHandler::kWhatByeReceived:
+        {
+            sp<AMessage> msg = dupNotify();
+            msg->setInt32("what", kWhatRTCPByeReceived);
+            msg->post();
             break;
         }
 

@@ -42,6 +42,10 @@
 #include <media/stagefright/Utils.h>
 #include <media/CharacterEncodingDetector.h>
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include <stagefright/AVExtensions.h>
+
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 namespace android {
 
 StagefrightMetadataRetriever::StagefrightMetadataRetriever()
@@ -93,6 +97,9 @@ status_t StagefrightMetadataRetriever::setDataSource(
     fd = dup(fd);
 
     ALOGV("setDataSource(%d, %" PRId64 ", %" PRId64 ")", fd, offset, length);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    AVUtils::get()->printFileName(fd);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 
     clearMetadata();
     mSource = new PlayerServiceFileSource(fd, offset, length);
@@ -242,8 +249,10 @@ sp<IMemory> StagefrightMetadataRetriever::getImageInternal(
         }
     }
 
+    bool preferhw = property_get_bool(
+            "media.stagefright.thumbnail.prefer_hw_codecs", false);
     if (metaOnly) {
-        return FrameDecoder::getMetadataOnly(trackMeta, colorFormat, thumbnail, bitDepth);
+        return FrameDecoder::getMetadataOnly(trackMeta, colorFormat, preferhw, thumbnail, bitDepth);
     }
 
     sp<IMediaSource> source = mExtractor->getTrack(i);
@@ -253,8 +262,6 @@ sp<IMemory> StagefrightMetadataRetriever::getImageInternal(
         return NULL;
     }
 
-    bool preferhw = property_get_bool(
-            "media.stagefright.thumbnail.prefer_hw_codecs", false);
     uint32_t flags = preferhw ? 0 : MediaCodecList::kPreferSoftwareCodecs;
     Vector<AString> matchingCodecs;
 
@@ -420,9 +427,11 @@ sp<IMemory> StagefrightMetadataRetriever::getFrameInternal(
         }
     }
 
+    bool preferhw = property_get_bool(
+            "media.stagefright.thumbnail.prefer_hw_codecs", false);
     if (metaOnly) {
         return FrameDecoder::getMetadataOnly(
-                trackMeta, colorFormat, false /* thumbnail */, bitDepth);
+                trackMeta, colorFormat, preferhw, false /* thumbnail */, bitDepth);
     }
 
     sp<IMediaSource> source = mExtractor->getTrack(i);
@@ -440,8 +449,6 @@ sp<IMemory> StagefrightMetadataRetriever::getFrameInternal(
         mAlbumArt = MediaAlbumArt::fromData(dataSize, data);
     }
 
-    bool preferhw = property_get_bool(
-            "media.stagefright.thumbnail.prefer_hw_codecs", false);
     uint32_t flags = preferhw ? 0 : MediaCodecList::kPreferSoftwareCodecs;
 
     Vector<AString> matchingCodecs;

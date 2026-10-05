@@ -51,6 +51,10 @@
 
 static const OMX_U32 kPortIndexInput = 0;
 static const OMX_U32 kPortIndexOutput = 1;
+// QTI_BEGIN: 2018-02-07: Video: stagefright: Add support for extradata
+static const OMX_U32 kPortIndexInputExtradata = 2;
+static const OMX_U32 kPortIndexOutputExtradata = 3;
+// QTI_END: 2018-02-07: Video: stagefright: Add support for extradata
 
 #define CLOGW(fmt, ...) ALOGW("[%p:%s] " fmt, mHandle, mName, ##__VA_ARGS__)
 
@@ -156,7 +160,9 @@ struct BufferMeta {
         }
 
         // check component returns proper range
-        sp<ABuffer> codec = getBuffer(header, true /* limit */);
+// QTI_BEGIN: 2018-04-29: Video: libstagefright: Copy the entire buffer from/to OMX component
+        sp<ABuffer> codec = getBuffer(header,!(header->nFlags & OMX_BUFFERFLAG_EXTRADATA));
+// QTI_END: 2018-04-29: Video: libstagefright: Copy the entire buffer from/to OMX component
 
         memcpy(getPointer() + header->nOffset, codec->data(), codec->size());
     }
@@ -166,9 +172,15 @@ struct BufferMeta {
             return;
         }
 
+// QTI_BEGIN: 2018-04-29: Video: libstagefright: Copy the entire buffer from/to OMX component
+        size_t bytesToCopy = header->nFlags & OMX_BUFFERFLAG_EXTRADATA ?
+            header->nAllocLen - header->nOffset : header->nFilledLen;
+// QTI_END: 2018-04-29: Video: libstagefright: Copy the entire buffer from/to OMX component
         memcpy(header->pBuffer + header->nOffset,
                 getPointer() + header->nOffset,
-                header->nFilledLen);
+// QTI_BEGIN: 2018-04-29: Video: libstagefright: Copy the entire buffer from/to OMX component
+                bytesToCopy);
+// QTI_END: 2018-04-29: Video: libstagefright: Copy the entire buffer from/to OMX component
     }
 
     // return the codec buffer
@@ -468,12 +480,21 @@ OMXNodeInstance::OMXNodeInstance(
     mMetadataType[1] = kMetadataBufferTypeInvalid;
     mPortMode[0] = IOMX::kPortModePresetByteBuffer;
     mPortMode[1] = IOMX::kPortModePresetByteBuffer;
+
     mSecureBufferType[0] = kSecureBufferTypeUnknown;
     mSecureBufferType[1] = kSecureBufferTypeUnknown;
     mGraphicBufferEnabled[0] = false;
     mGraphicBufferEnabled[1] = false;
     mIsSecure = AString(name).endsWith(".secure");
     mLegacyAdaptiveExperiment = ADebug::isExperimentEnabled("legacy-adaptive");
+// QTI_BEGIN: 2020-02-18: Video: libstagefright: omx: Add quirks for VP8 codec
+    if (!strcmp(mName, "qcom.encoder.tme") || !strcmp(mName, "qti.decoder.vc1sw") ||
+        !strcmp(mName, "qcom.decoder.vp8") || !strcmp(mName, "qcom.encoder.vp8")) {
+// QTI_END: 2020-02-18: Video: libstagefright: omx: Add quirks for VP8 codec
+// QTI_BEGIN: 2018-05-08: Video: Add quirk for tme encoder session.
+        mQuirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnOutputPorts;
+    }
+// QTI_END: 2018-05-08: Video: Add quirk for tme encoder session.
 }
 
 OMXNodeInstance::~OMXNodeInstance() {
@@ -599,6 +620,12 @@ status_t OMXNodeInstance::freeNode() {
             LOG_ALWAYS_FATAL("unknown state %s(%#x).", asString(state), state);
             break;
     }
+
+// QTI_BEGIN: 2018-05-07: Video: libstagefright: Free buffers on observer died
+    if (mActiveBuffers.size() > 0) {
+        freeActiveBuffers();
+    }
+// QTI_END: 2018-05-07: Video: libstagefright: Free buffers on observer died
 
     Mutex::Autolock _l(mLock);
 
@@ -1220,7 +1247,11 @@ status_t OMXNodeInstance::useBuffer(
         return BAD_VALUE;
     }
 
-    if (portIndex >= NELEM(mNumPortBuffers)) {
+// QTI_BEGIN: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
+    if (portIndex == kPortIndexInputExtradata || portIndex == kPortIndexOutputExtradata) {
+        // Allow extradata ports
+    } else if (portIndex >= NELEM(mNumPortBuffers)) {
+// QTI_END: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
         return BAD_VALUE;
     }
 
@@ -1261,7 +1292,11 @@ status_t OMXNodeInstance::useBuffer(
         }
 
         case OMXBuffer::kBufferTypeHidlMemory: {
-                if (mPortMode[portIndex] != IOMX::kPortModePresetByteBuffer
+// QTI_BEGIN: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
+                if (portIndex == kPortIndexInputExtradata || portIndex == kPortIndexOutputExtradata) {
+                // Allow extradata ports
+                } else if (mPortMode[portIndex] != IOMX::kPortModePresetByteBuffer
+// QTI_END: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
                         && mPortMode[portIndex] != IOMX::kPortModeDynamicANWBuffer
                         && mPortMode[portIndex] != IOMX::kPortModeDynamicNativeHandle) {
                     break;
@@ -1290,9 +1325,20 @@ status_t OMXNodeInstance::useBuffer_l(
     BufferMeta *buffer_meta;
     OMX_BUFFERHEADERTYPE *header;
     OMX_ERRORTYPE err = OMX_ErrorNone;
-    bool isMetadata = mMetadataType[portIndex] != kMetadataBufferTypeInvalid;
+// QTI_BEGIN: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
+     bool isMetadata;
+    if (portIndex == kPortIndexInputExtradata || portIndex == kPortIndexOutputExtradata) {
+        isMetadata = false;
+    } else {
+        isMetadata = mMetadataType[portIndex] != kMetadataBufferTypeInvalid;
+    }
+// QTI_END: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
 
-    if (!isMetadata && mGraphicBufferEnabled[portIndex]) {
+// QTI_BEGIN: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
+    if (portIndex == kPortIndexInputExtradata || portIndex == kPortIndexOutputExtradata) {
+        // Allow extradata ports
+    } else if (!isMetadata && mGraphicBufferEnabled[portIndex]) {
+// QTI_END: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
         ALOGE("b/62948670");
         android_errorWriteLog(0x534e4554, "62948670");
         return INVALID_OPERATION;
@@ -1337,9 +1383,16 @@ status_t OMXNodeInstance::useBuffer_l(
         allottedSize = paramsSize;
     }
 
-    bool isOutputGraphicMetadata = (portIndex == kPortIndexOutput) &&
-            (mMetadataType[portIndex] == kMetadataBufferTypeGrallocSource ||
-                    mMetadataType[portIndex] == kMetadataBufferTypeANWBuffer);
+// QTI_BEGIN: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
+    bool isOutputGraphicMetadata;
+    if (portIndex == kPortIndexInputExtradata || portIndex == kPortIndexOutputExtradata) {
+        isOutputGraphicMetadata = false;
+    } else {
+        isOutputGraphicMetadata = (portIndex == kPortIndexOutput) &&
+                (mMetadataType[portIndex] == kMetadataBufferTypeGrallocSource ||
+                        mMetadataType[portIndex] == kMetadataBufferTypeANWBuffer);
+    }
+// QTI_END: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
 
     uint32_t requiresAllocateBufferBit =
         (portIndex == kPortIndexInput)
@@ -1347,7 +1400,11 @@ status_t OMXNodeInstance::useBuffer_l(
             : kRequiresAllocateBufferOnOutputPorts;
 
     // we use useBuffer for output metadata regardless of quirks
-    if (!isOutputGraphicMetadata && (mQuirks & requiresAllocateBufferBit)) {
+// QTI_BEGIN: 2018-02-07: Video: stagefright: Add support for extradata
+    if (!isOutputGraphicMetadata && (mQuirks & requiresAllocateBufferBit) &&
+            portIndex != kPortIndexOutputExtradata &&
+            portIndex != kPortIndexInputExtradata) {
+// QTI_END: 2018-02-07: Video: stagefright: Add support for extradata
         // metadata buffers are not connected cross process; only copy if not meta.
         buffer_meta = new BufferMeta(
                     params, hParams, portIndex, !isMetadata /* copy */, NULL /* data */);
@@ -1897,7 +1954,12 @@ status_t OMXNodeInstance::emptyBuffer_l(
         return INVALID_OPERATION;
     }
 
-    OMX_BUFFERHEADERTYPE *header = findBufferHeader(buffer, kPortIndexInput);
+// QTI_BEGIN: 2018-02-07: Video: stagefright: Add support for extradata
+    OMX_BUFFERHEADERTYPE *header = NULL;
+    OMX_BOOL extradata_buffer = ((header = findBufferHeader(buffer, kPortIndexInput)) != NULL) ?
+        OMX_FALSE : ((header = findBufferHeader(buffer, kPortIndexInputExtradata)) != NULL) ?
+        OMX_TRUE : OMX_FALSE;
+// QTI_END: 2018-02-07: Video: stagefright: Add support for extradata
     if (header == NULL) {
         ALOGE("b/25884056");
         return BAD_VALUE;
@@ -1907,7 +1969,9 @@ status_t OMXNodeInstance::emptyBuffer_l(
 
     // set up proper filled length if component is configured for gralloc metadata mode
     // ignore rangeOffset in this case (as client may be assuming ANW meta buffers).
-    if (mMetadataType[kPortIndexInput] == kMetadataBufferTypeGrallocSource) {
+// QTI_BEGIN: 2018-02-07: Video: stagefright: Add support for extradata
+    if (!extradata_buffer && mMetadataType[kPortIndexInput] == kMetadataBufferTypeGrallocSource) {
+// QTI_END: 2018-02-07: Video: stagefright: Add support for extradata
         header->nFilledLen = rangeLength ? sizeof(VideoGrallocMetadata) : 0;
         header->nOffset = 0;
     } else {
@@ -2198,6 +2262,11 @@ status_t OMXNodeInstance::setQuirks(OMX_U32 quirks) {
         return BAD_VALUE;
     }
 
+// QTI_BEGIN: 2018-05-08: Video: Add quirk for tme encoder session.
+    if (!strcmp(mName, "qcom.encoder.tme")) {
+        quirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnOutputPorts;
+    }
+// QTI_END: 2018-05-08: Video: Add quirk for tme encoder session.
     mQuirks = quirks;
 
     return OK;
@@ -2525,7 +2594,11 @@ void OMXNodeInstance::addActiveBuffer(OMX_U32 portIndex, IOMX::buffer_id id) {
     active.mID = id;
     mActiveBuffers.push(active);
 
-    if (portIndex < NELEM(mNumPortBuffers)) {
+// QTI_BEGIN: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
+    if (portIndex == kPortIndexInputExtradata || portIndex == kPortIndexOutputExtradata) {
+        // Allow extradata ports
+    } else if (portIndex < NELEM(mNumPortBuffers)) {
+// QTI_END: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
         ++mNumPortBuffers[portIndex];
     }
 }
@@ -2537,7 +2610,11 @@ void OMXNodeInstance::removeActiveBuffer(
                 && mActiveBuffers[i].mID == id) {
             mActiveBuffers.removeItemsAt(i);
 
-            if (portIndex < NELEM(mNumPortBuffers)) {
+// QTI_BEGIN: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
+            if (portIndex == kPortIndexInputExtradata || portIndex == kPortIndexOutputExtradata) {
+                // Allow extradata ports
+            } else if (portIndex < NELEM(mNumPortBuffers)) {
+// QTI_END: 2018-06-17: Audio: libstagefright: Avoid additional checks for extradata ports
                 --mNumPortBuffers[portIndex];
             }
             return;

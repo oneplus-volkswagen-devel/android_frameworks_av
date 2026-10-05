@@ -79,7 +79,9 @@ CameraSourceTimeLapse::CameraSourceTimeLapse(
 #if WB_LIBCAMERASERVICE_WITH_DEPENDENCIES
         const sp<Surface>& surface,
 #else
-        const sp<IGraphicBufferProducer>& surface,
+// QTI_BEGIN: 2025-09-22: Video: av: Conflict Resolution for changes done as part of IGBP replacement.
+        const sp<MediaSurfaceType>& surface,
+// QTI_END: 2025-09-22: Video: av: Conflict Resolution for changes done as part of IGBP replacement.
 #endif
         int64_t timeBetweenFrameCaptureUs)
       : CameraSource(camera, proxy, cameraId, clientName, clientUid, clientPid,
@@ -277,7 +279,10 @@ bool CameraSourceTimeLapse::skipFrameAndModifyTimeStamp(int64_t *timestampUs) {
     // The first 2 output frames from the encoder are: decoder specific info and
     // the compressed video frame data for the first input video frame.
     if (mNumFramesEncoded >= 1 && *timestampUs <
-        (mLastTimeLapseFrameRealTimestampUs + mTimeBetweenFrameCaptureUs)) {
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+        (mLastTimeLapseFrameRealTimestampUs + mTimeBetweenFrameCaptureUs) &&
+        (mTimeBetweenFrameCaptureUs > mTimeBetweenTimeLapseVideoFramesUs + 1)) {
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
         // Skip all frames from last encoded frame until
         // sufficient time (mTimeBetweenFrameCaptureUs) has passed.
         // Tell the camera to release its recording frame and return.
@@ -292,6 +297,14 @@ bool CameraSourceTimeLapse::skipFrameAndModifyTimeStamp(int64_t *timestampUs) {
 
         mLastTimeLapseFrameRealTimestampUs = *timestampUs;
         *timestampUs = mLastFrameTimestampUs + mTimeBetweenTimeLapseVideoFramesUs;
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+        // Update start-time once the captured-time reaches the expected start-time.
+        // Not doing so will result in CameraSource always dropping frames since
+        // updated-timestamp will never intersect start-timestamp
+        if ((mNumFramesReceived == 0 && mLastTimeLapseFrameRealTimestampUs >= mStartTimeUs)) {
+            mStartTimeUs = *timestampUs;
+        }
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
         return false;
     }
     return false;

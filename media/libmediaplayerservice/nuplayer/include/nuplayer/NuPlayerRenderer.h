@@ -116,7 +116,6 @@ protected:
 
     virtual void onMessageReceived(const sp<AMessage> &msg);
 
-private:
     enum {
         kWhatDrainAudioQueue     = 'draA',
         kWhatDrainVideoQueue     = 'draV',
@@ -306,7 +305,9 @@ private:
     int32_t getDrainGeneration(bool audio);
     bool getSyncQueues();
     void onAudioTearDown(AudioTearDownReason reason);
-    status_t onOpenAudioSink(
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    virtual status_t onOpenAudioSink(
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             const sp<AMessage> &format,
             bool offloadOnly,
             bool hasVideo,

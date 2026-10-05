@@ -39,6 +39,10 @@
 #include <media/stagefright/MediaCodec.h>
 #include <media/stagefright/MediaDefs.h>
 #include <media/stagefright/MediaErrors.h>
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include <stagefright/AVExtensions.h>
+#include "mediaplayerservice/AVNuExtensions.h"
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 #include <media/stagefright/SurfaceUtils.h>
 #include <mpeg2ts/ATSParser.h>
 #include <gui/Surface.h>
@@ -338,8 +342,15 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
     mComponentName.append(" decoder");
     ALOGV("[%s] onConfigure (surface=%p)", mComponentName.c_str(), mSurface.get());
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    mCodec = AVUtils::get()->createCustomComponentByName(mCodecLooper, mime.c_str(), false /* encoder */, format);
+    if (mCodec == NULL) {
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     mCodec = MediaCodec::CreateByType(
             mCodecLooper, mime.c_str(), false /* encoder */, NULL /* err */, mPid, mUid, format);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    }
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     int32_t secure = 0;
     if (format->findInt32("secure", &secure) && secure != 0) {
         if (mCodec != NULL) {
@@ -843,6 +854,14 @@ bool NuPlayer::Decoder::handleAnOutputBuffer(
         }
 
         mSkipRenderingUntilMediaTimeUs = -1;
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    } else if ((flags & MediaCodec::BUFFER_FLAG_DATACORRUPT) &&
+            AVNuUtils::get()->dropCorruptFrame()) {
+        ALOGV("[%s] dropping corrupt buffer at time %lld as requested.",
+                     mComponentName.c_str(), (long long)timeUs);
+        reply->post();
+        return true;
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     }
 
     // wait until 1st frame comes out to signal resume complete
@@ -967,6 +986,9 @@ status_t NuPlayer::Decoder::fetchInputData(sp<AMessage> &reply) {
                     // treat seamless format change separately
                     formatChange = !seamlessFormatChange;
                 }
+// QTI_BEGIN: 2018-04-12: Video: httplive: refactor for HLS customization
+                AVNuUtils::get()->checkFormatChange(&formatChange, accessUnit);
+// QTI_END: 2018-04-12: Video: httplive: refactor for HLS customization
 
                 // For format or time change, return EOS to queue EOS input,
                 // then wait for EOS on output.
@@ -1391,4 +1413,3 @@ void NuPlayer::Decoder::notifyResumeCompleteIfNecessary() {
 }
 
 }  // namespace android
-

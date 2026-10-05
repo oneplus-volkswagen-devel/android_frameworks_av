@@ -252,6 +252,7 @@ enum {
     // Key for ALAC Magic Cookie
     kKeyAlacMagicCookie  = 'almc', // raw data
 
+    kKeyFeatureNalLengthBitstream = 'nlbs', // int32_t key to check nal length bistream
     // AC-4 AudioPresentationInfo
     kKeyAudioPresentationInfo = 'audP',  // raw data
 
@@ -296,6 +297,9 @@ enum {
     // DVB audio description
     kKeyDvbAudioDescription = 'addt', // bool (int32_t), DVB audio description only defined for
                                       // audio component
+// QTI_BEGIN: 2021-03-19: Video: libstagefright: Add changes to handle multiple slices in writer
+    kKeyVendorFeatureNalLength = 'vfnl', // int32_t key to check nal length enable
+// QTI_END: 2021-03-19: Video: libstagefright: Add changes to handle multiple slices in writer
 
     // DVB teletext magazine number
     kKeyDvbTeletextMagazineNumber = 'ttxm', // int32_t, DVB teletext magazine number

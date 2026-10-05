@@ -1548,6 +1548,10 @@ protected:
     std::string mMetricsId;  // GUARDED_BY(mLock), could change in createTrack_l().
     std::string mCallerName; // for example "aaudio"
 
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    bool                    mTrackOffloaded;
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
+
     // report error to mediametrics.
     void reportError(status_t status, const char *event, const char *message) const;
 

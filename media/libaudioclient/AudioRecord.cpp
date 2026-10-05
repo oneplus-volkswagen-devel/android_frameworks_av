@@ -949,9 +949,17 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch)
     mSessionId = output.sessionId;
     mSampleRate = output.sampleRate;
     mServerConfig = output.serverConfig;
-    mServerFrameSize = audio_bytes_per_frame(
+// QTI_BEGIN: 2022-04-01: Audio: av: fix compress capture with AudioRecord
+    if (audio_is_linear_pcm(mServerConfig.format)) {
+// QTI_END: 2022-04-01: Audio: av: fix compress capture with AudioRecord
+      mServerFrameSize = audio_bytes_per_frame(
             audio_channel_count_from_in_mask(mServerConfig.channel_mask), mServerConfig.format);
-    mServerSampleSize = audio_bytes_per_sample(mServerConfig.format);
+      mServerSampleSize = audio_bytes_per_sample(mServerConfig.format);
+// QTI_BEGIN: 2022-04-01: Audio: av: fix compress capture with AudioRecord
+    } else {
+        mServerFrameSize = mServerSampleSize = sizeof(uint8_t);
+    }
+// QTI_END: 2022-04-01: Audio: av: fix compress capture with AudioRecord
     mHalSampleRate = output.halConfig.sample_rate;
     mHalChannelCount = audio_channel_count_from_in_mask(output.halConfig.channel_mask);
     mHalFormat = output.halConfig.format;

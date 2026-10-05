@@ -72,7 +72,9 @@ public:
 
     status_t setGeoData(int latitudex10000, int longitudex10000);
     status_t setCaptureRate(float captureFps);
+// QTI_BEGIN: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
     status_t setTemporalLayerCount(uint32_t layerCount);
+// QTI_END: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
     void notifyApproachingLimit();
     virtual void setStartTimeOffsetMs(int ms) { mStartTimeOffsetMs = ms; }
     virtual int32_t getStartTimeOffsetMs() const { return mStartTimeOffsetMs; }
@@ -98,6 +100,9 @@ private:
     status_t mInitCheck;
     bool mIsRealTimeRecording;
     bool mIsBackgroundMode;
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+protected:
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     bool mUse4ByteNalLength;
     bool mIsFileSizeLimitExplicitlyRequested;
     bool mPaused;
@@ -152,9 +157,14 @@ private:
 
     sp<AMessage> mMetaKeys;
 
-    void setStartTimestampUs(int64_t timeUs);
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+    void setStartTimestampUs(int64_t timeUs, int64_t *trackStartTime);
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
     int64_t getStartTimestampUs();  // Not const
     int32_t getStartTimeOffsetBFramesUs();
+// QTI_BEGIN: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
+    int64_t getStartTimeOffsetTimeUs(int64_t startTime);
+// QTI_END: 2018-10-18: Audio: libstagefright: Protect MPEG4Writer start time access
     status_t startTracks(MetaData *params);
     size_t numTracks();
     int64_t estimateMoovBoxSize(int32_t bitRate);
@@ -307,7 +317,10 @@ private:
     off64_t addSample_l(
             MediaBuffer *buffer, bool usePrefix,
             uint32_t tiffHdrOffset, size_t *bytesWritten);
-    void addLengthPrefixedSample_l(MediaBuffer *buffer);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    static void StripStartcode(MediaBuffer *buffer);
+    virtual void addLengthPrefixedSample_l(MediaBuffer *buffer);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     void addMultipleLengthPrefixedSamples_l(MediaBuffer *buffer);
     uint16_t addProperty_l(const ItemProperty &);
     status_t reserveItemId_l(size_t numItems, uint16_t *itemIdBase);

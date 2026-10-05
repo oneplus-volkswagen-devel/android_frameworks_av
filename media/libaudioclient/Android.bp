@@ -214,6 +214,13 @@ cc_library {
         "libmediautils",
     ],
 
+    include_dirs: [
+        "frameworks/av/media/libavextensions",
+    ],
+    local_include_dirs: [
+        "aidl",
+        "include/media",
+    ],
     header_libs: [
         "libaudioutils_headers",
         "libbase_headers",
@@ -226,6 +233,9 @@ cc_library {
         "effect-aidl-cpp",
         // for memory heap analysis
         "libc_malloc_debug_backtrace",
+        // QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+        "libavmediaextentions",
+        // QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
     ],
     cflags: [
         "-Wall",

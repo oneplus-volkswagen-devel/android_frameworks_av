@@ -18,6 +18,7 @@
 //#define LOG_NDEBUG 0
 
 #include <algorithm>
+#include <dlfcn.h>
 
 #include <fcntl.h>
 #include <sys/prctl.h>
@@ -47,6 +48,26 @@ using android::media::audio::common::AudioMMapPolicy;
 using android::media::audio::common::AudioMMapPolicyInfo;
 using android::media::audio::common::AudioMMapPolicyType;
 
+// QTI_BEGIN: 2023-09-27: Audio: audioserver: register the IHalAdapterVendorExtension(IHAVE)
+void registerIHalAdapterVendorExtension() {
+    constexpr char kLibPath[] = "libaudiohalvendorextn.so";
+    void *libHandle = dlopen(kLibPath, RTLD_NOW | RTLD_NODELETE);
+    if (libHandle == nullptr) {
+        ALOGE("Failed to load library: %s (%s)", kLibPath, dlerror());
+        return;
+    }
+
+    auto registerInterface =
+        reinterpret_cast<void (*)()>(dlsym(libHandle, "registerInterface"));
+    if (registerInterface == nullptr) {
+        ALOGE("Failed to find symbol(registerInterface): error (%s)",
+              dlerror());
+        return;
+    }
+    registerInterface();
+}
+
+// QTI_END: 2023-09-27: Audio: audioserver: register the IHalAdapterVendorExtension(IHAVE)
 int main(int argc __unused, char **argv __unused)
 {
     SLOGI("%s: starting", __func__);
@@ -58,6 +79,9 @@ int main(int argc __unused, char **argv __unused)
         20 /* upper limit as percentage of physical RAM */);
 
     signal(SIGPIPE, SIG_IGN);
+
+    // Make sure IHAVE is registered before AudioFlinger
+    registerIHalAdapterVendorExtension();
 
     android::hardware::configureRpcThreadpool(4, false /*callerWillJoin*/);
 

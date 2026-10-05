@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
+// QTI_BEGIN: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
 //#define LOG_NDEBUG 0
+// QTI_END: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
+// QTI_BEGIN: 2018-06-05: Video: media: Add changes to pick target specific media xml's
+#define PROP_VALUE_MAX 92
+// QTI_END: 2018-06-05: Video: media: Add changes to pick target specific media xml's
 #define LOG_TAG "MediaCodecsXmlParser"
 
 #include <media/stagefright/xmlparser/MediaCodecsXmlParser.h>
@@ -41,6 +46,9 @@
 #include <memory>
 #include <mutex>
 #include <string>
+// QTI_BEGIN: 2018-06-05: Video: media: Add changes to pick target specific media xml's
+#include <cutils/properties.h>
+// QTI_END: 2018-06-05: Video: media: Add changes to pick target specific media xml's
 #include <vector>
 
 namespace android {
@@ -123,6 +131,73 @@ status_t combineStatus(status_t a, status_t b) {
     }
 }
 
+// QTI_BEGIN: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+std::string getVendorXmlPath(const std::string &path) {
+    std::string vendorPath;
+    std::string result = path;
+
+    if (!strncmp(path.c_str(), "/vendor/etc/media_codecs.xml",
+                    strlen("/vendor/etc/media_codecs.xml"))) {
+        vendorPath = "/vendor/etc/media_codecs_vendor";
+    } else if (!strncmp(path.c_str(), "/vendor/etc/media_codecs_performance.xml",
+                    strlen("/vendor/etc/media_codecs_performance.xml"))) {
+        vendorPath = "/vendor/etc/media_codecs_performance";
+    }
+
+    if (!vendorPath.empty()) {
+        if (fileExists(vendorPath + std::string(".xml"))) {
+            char version[PROP_VALUE_MAX] = {0};
+            result = vendorPath + std::string(".xml");
+// QTI_END: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+// QTI_BEGIN: 2019-08-27: Video: xmlparser: Read target version vendor property for vendor
+#ifdef __ANDROID_VNDK__
+// QTI_END: 2019-08-27: Video: xmlparser: Read target version vendor property for vendor
+// QTI_BEGIN: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+            property_get("vendor.media.target.version", version, "0");
+// QTI_END: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+// QTI_BEGIN: 2019-08-27: Video: xmlparser: Read target version vendor property for vendor
+#else
+            property_get("vendor.sys.media.target.version", version, "0");
+#endif
+// QTI_END: 2019-08-27: Video: xmlparser: Read target version vendor property for vendor
+// QTI_BEGIN: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+            if (atoi(version) > 0) {
+                std::string versionedXml = vendorPath + std::string("_v") +
+                                 std::string(version) + std::string(".xml");
+                if(fileExists(versionedXml)) {
+                    result = versionedXml;
+                }
+            }
+        }
+        ALOGI("getVendorXmlPath (%s)", result.c_str());
+    }
+// QTI_END: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+
+// QTI_BEGIN: 2021-07-06: Video: Add provision to choose different media XMLs based on system image
+    // Choose different xmls based on system (if needed)
+    if (!android::base::GetProperty("ro.media.xml_variant.codecs", "").empty()){
+        const std::vector<std::string> &xmlFiles = MediaCodecsXmlParser::getDefaultXmlNames();
+        for (const std::string &xmlName : xmlFiles) {
+            vendorPath = "/vendor/etc/" + xmlName;
+            if (!strncmp(path.c_str(), vendorPath.c_str(), vendorPath.size())) {
+                vendorPath = vendorPath.substr(0,vendorPath.size()-4) + "_vendor.xml";
+                if (fileExists(vendorPath)) {
+                    result = vendorPath;
+                }
+                ALOGI("getVendorXmlPath %s", result.c_str());
+                break;
+            }
+// QTI_END: 2021-07-06: Video: Add provision to choose different media XMLs based on system image
+// QTI_BEGIN: 2021-01-06: Video: Stagefright: Update the logic to choose xml files
+        }
+    }
+// QTI_END: 2021-01-06: Video: Stagefright: Update the logic to choose xml files
+
+// QTI_BEGIN: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+    return result;
+}
+
+// QTI_END: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
 MediaCodecsXmlParser::StringSet parseCommaSeparatedStringSet(const char *s) {
     MediaCodecsXmlParser::StringSet result;
     for (const char *ptr = s ? : ""; *ptr; ) {
@@ -174,8 +249,10 @@ struct MediaCodecsXmlParser::Impl {
               mError(error) {
             if (error.empty() && s) {
                 mError = "Failed (" + std::string(asString(s)) + ")";
+// QTI_BEGIN: 2018-06-05: Video: media: Add changes to pick target specific media xml's
             }
         }
+// QTI_END: 2018-06-05: Video: media: Add changes to pick target specific media xml's
         operator status_t() const { return mStatus; }
         std::string error() const { return mError; }
     };
@@ -187,6 +264,12 @@ struct MediaCodecsXmlParser::Impl {
         AttributeMap mServiceAttributeMap;
         CodecMap mCodecMap;
         Result addGlobal(std::string key, std::string value, bool updating);
+// QTI_BEGIN: 2023-12-04: Core: libstagefright: Add support for Media codecs override
+
+        //Override attributes
+        std::vector<std::string> mDecoders_override;
+        std::vector<std::string> mEncoders_override;
+// QTI_END: 2023-12-04: Core: libstagefright: Add support for Media codecs override
     };
 
     enum Section {
@@ -241,7 +324,9 @@ struct MediaCodecsXmlParser::Impl {
             return {
                 mIncludeStack.size(), mSectionStack.size(), mVariantsStack.size(), mCurrent.size()
             };
+// QTI_BEGIN: 2018-06-05: Video: media: Add changes to pick target specific media xml's
         }
+// QTI_END: 2018-06-05: Video: media: Add changes to pick target specific media xml's
 
         void restore(RestorePoint rp) {
             CHECK_GE(mIncludeStack.size(), rp.numIncludes);
@@ -340,6 +425,10 @@ struct MediaCodecsXmlParser::Impl {
         status_t mStatus;
 
         void parseXmlFile();
+// QTI_BEGIN: 2023-12-04: Core: libstagefright: Add support for Media codecs override
+        void parseOverrideXmlFile();
+        void parseXmlFile_override();
+// QTI_END: 2023-12-04: Core: libstagefright: Add support for Media codecs override
 
         // XML parser callbacks
         static void StartElementHandlerWrapper(void *me, const char *name, const char **attrs);
@@ -348,6 +437,24 @@ struct MediaCodecsXmlParser::Impl {
         void startElementHandler(const char *name, const char **attrs);
         void endElementHandler(const char *name);
 
+// QTI_BEGIN: 2023-12-04: Core: libstagefright: Add support for Media codecs override
+        // Override XML parser callbacks
+        static void StartOverrideElementHandlerWrapper(
+                void *me, const char *name, const char **attrs);
+        static void EndOverrideElementHandlerWrapper(void *me, const char *name);
+
+        void startOverrideElementHandler(const char *name, const char **attrs);
+        void endOverrideElementHandler(const char *name);
+
+        // XML parser callbacks if Override xml exists
+        static void StartElementHandlerWrapper_override(
+                void *me, const char *name, const char **attrs);
+        static void EndElementHandlerWrapper_override(void *me, const char *name);
+
+        void startElementHandler_override(const char *name, const char **attrs);
+        void endElementHandler_override(const char *name);
+
+// QTI_END: 2023-12-04: Core: libstagefright: Add support for Media codecs override
         void updateStatus(status_t status);
         void logAnyErrors(const Result &status) const;
         status_t getStatus() const { return mStatus; }
@@ -448,20 +555,79 @@ status_t MediaCodecsXmlParser::Impl::parseXmlFilesInSearchDirs(
 
 status_t MediaCodecsXmlParser::Impl::parseXmlPath(const std::string &path) {
     std::lock_guard<std::mutex> guard(mLock);
-    if (!fileExists(path)) {
-        ALOGV("Cannot find %s", path.c_str());
+// QTI_BEGIN: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+    std::string vendorPath = getVendorXmlPath(path);
+
+    if (!fileExists(vendorPath)) {
+// QTI_END: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+        ALOGV("Cannot find %s", vendorPath.c_str());
         mParsingStatus = combineStatus(mParsingStatus, NAME_NOT_FOUND);
         return NAME_NOT_FOUND;
     }
 
+// QTI_BEGIN: 2023-12-04: Core: libstagefright: Add support for Media codecs override
+    std::string qspaEnabled = android::base::GetProperty("ro.boot.vendor.qspa", "");
+    if (!strcmp(qspaEnabled.c_str(), "true")) {
+        if (!android::base::GetProperty("ro.media.xml_variant.codecs", "").empty()) {
+            const std::vector<std::string> &xmlFiles = MediaCodecsXmlParser::getDefaultXmlNames();
+            for (const std::string &xmlName : xmlFiles) {
+                std::string vendorXmlPath = "/vendor/etc/" + xmlName.substr(0,xmlName.size()-4)
+                        + "_vendor.xml";
+                if (!strncmp(vendorPath.c_str(), vendorXmlPath.c_str(), vendorXmlPath.size())) {
+                    std::string val = android::base::GetProperty("ro.boot.vendor.qspa.video", "");
+                    if (!strcmp(val.c_str(), "disabled"))
+                    {
+                        mState.data().mDecoders_override.clear();
+                        mState.data().mEncoders_override.clear();
+                        std::string overrideXmlPath = vendorXmlPath.substr(0,vendorXmlPath.size()-4)
+                                + "_override.xml";
+                        if (fileExists(overrideXmlPath)) {
+                            ALOGI("Qspa override Xml path %s", overrideXmlPath.c_str());
+                            State::RestorePoint rp_override = mState.createRestorePoint();
+                            Parser parser_override(&mState, overrideXmlPath);
+                            parser_override.parseOverrideXmlFile();
+                            mState.restore(rp_override);
+
+                            if (parser_override.getStatus() != OK) {
+                                ALOGD("parseOverrideXmlPath(%s) failed with %s",
+                                    overrideXmlPath.c_str(), asString(parser_override.getStatus()));
+                            }
+                            mParsingStatus = combineStatus(mParsingStatus,
+                                    parser_override.getStatus());
+
+                            //Xml parsing if override xml exists
+                            State::RestorePoint rp = mState.createRestorePoint();
+                            Parser parser(&mState, vendorPath);
+                            parser.parseXmlFile_override();
+                            mState.restore(rp);
+
+                            if (parser.getStatus() != OK) {
+                                ALOGD("parseXmlPath(%s) failed with %s", vendorPath.c_str(),
+                                        asString(parser.getStatus()));
+                            }
+                            mParsingStatus = combineStatus(mParsingStatus, parser.getStatus());
+                            return parser.getStatus();
+
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+// QTI_END: 2023-12-04: Core: libstagefright: Add support for Media codecs override
     // save state (even though we should always be at toplevel here)
     State::RestorePoint rp = mState.createRestorePoint();
-    Parser parser(&mState, path);
+// QTI_BEGIN: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+    Parser parser(&mState, vendorPath);
+// QTI_END: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
     parser.parseXmlFile();
     mState.restore(rp);
 
     if (parser.getStatus() != OK) {
-        ALOGD("parseXmlPath(%s) failed with %s", path.c_str(), asString(parser.getStatus()));
+// QTI_BEGIN: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
+        ALOGD("parseXmlPath(%s) failed with %s", vendorPath.c_str(), asString(parser.getStatus()));
+// QTI_END: 2019-07-02: Video: xmlparser: Add support for parsing target specific xml
     }
     mParsingStatus = combineStatus(mParsingStatus, parser.getStatus());
     return parser.getStatus();
@@ -590,6 +756,148 @@ void MediaCodecsXmlParser::Impl::Parser::EndElementHandlerWrapper(void *me, cons
     static_cast<MediaCodecsXmlParser::Impl::Parser*>(me)->endElementHandler(name);
 }
 
+// QTI_BEGIN: 2023-12-04: Core: libstagefright: Add support for Media codecs override
+void MediaCodecsXmlParser::Impl::Parser::parseOverrideXmlFile() {
+    const char *path = mPath.c_str();
+    ALOGD("parsing %s...", path);
+    FILE *file = fopen(path, "r");
+
+    if (file == nullptr) {
+        ALOGD("unable to open media codecs override configuration xml file: %s", path);
+        mStatus = NAME_NOT_FOUND;
+        return;
+    }
+
+    mParser = std::shared_ptr<XML_ParserStruct>(
+        ::XML_ParserCreate(nullptr),
+        [](XML_ParserStruct *parser) { ::XML_ParserFree(parser); });
+    LOG_FATAL_IF(!mParser, "XML_MediaCodecsXmlParserCreate() failed.");
+
+    ::XML_SetUserData(mParser.get(), this);
+    ::XML_SetElementHandler(mParser.get(), StartOverrideElementHandlerWrapper,
+            EndOverrideElementHandlerWrapper);
+
+    static constexpr int BUFF_SIZE = 512;
+    // updateStatus(OK);
+    if (mStatus == NO_INIT) {
+        mStatus = OK;
+    }
+    while (mStatus == OK) {
+        void *buff = ::XML_GetBuffer(mParser.get(), BUFF_SIZE);
+        if (buff == nullptr) {
+            ALOGD("failed in call to XML_GetBuffer()");
+            mStatus = UNKNOWN_ERROR;
+            break;
+        }
+
+        int bytes_read = ::fread(buff, 1, BUFF_SIZE, file);
+        if (bytes_read < 0) {
+            ALOGD("failed in call to read");
+            mStatus = ERROR_IO;
+            break;
+        }
+
+        XML_Status status = ::XML_ParseBuffer(mParser.get(), bytes_read, bytes_read == 0);
+        if (status != XML_STATUS_OK) {
+            PLOGD("malformed (%s)", ::XML_ErrorString(::XML_GetErrorCode(mParser.get())));
+            mStatus = ERROR_MALFORMED;
+            break;
+        }
+
+        if (bytes_read == 0) {
+            break;
+        }
+    }
+
+    mParser.reset();
+
+    fclose(file);
+    file = nullptr;
+}
+
+// static
+void MediaCodecsXmlParser::Impl::Parser::StartOverrideElementHandlerWrapper(
+        void *me, const char *name, const char **attrs) {
+    static_cast<MediaCodecsXmlParser::Impl::Parser*>(me)->startOverrideElementHandler(name, attrs);
+}
+
+// static
+void MediaCodecsXmlParser::Impl::Parser::EndOverrideElementHandlerWrapper(
+        void *me, const char *name) {
+    static_cast<MediaCodecsXmlParser::Impl::Parser*>(me)->endOverrideElementHandler(name);
+}
+
+void MediaCodecsXmlParser::Impl::Parser::parseXmlFile_override() {
+    const char *path = mPath.c_str();
+    ALOGD("parsing %s...", path);
+    FILE *file = fopen(path, "r");
+
+    if (file == nullptr) {
+        ALOGD("unable to open media codecs configuration xml file: %s", path);
+        mStatus = NAME_NOT_FOUND;
+        return;
+    }
+
+    mParser = std::shared_ptr<XML_ParserStruct>(
+        ::XML_ParserCreate(nullptr),
+        [](XML_ParserStruct *parser) { ::XML_ParserFree(parser); });
+    LOG_FATAL_IF(!mParser, "XML_MediaCodecsXmlParserCreate() failed.");
+
+    ::XML_SetUserData(mParser.get(), this);
+    ::XML_SetElementHandler(mParser.get(), StartElementHandlerWrapper_override,
+            EndElementHandlerWrapper_override);
+
+    static constexpr int BUFF_SIZE = 512;
+    // updateStatus(OK);
+    if (mStatus == NO_INIT) {
+        mStatus = OK;
+    }
+    while (mStatus == OK) {
+        void *buff = ::XML_GetBuffer(mParser.get(), BUFF_SIZE);
+        if (buff == nullptr) {
+            ALOGD("failed in call to XML_GetBuffer()");
+            mStatus = UNKNOWN_ERROR;
+            break;
+        }
+
+        int bytes_read = ::fread(buff, 1, BUFF_SIZE, file);
+        if (bytes_read < 0) {
+            ALOGD("failed in call to read");
+            mStatus = ERROR_IO;
+            break;
+        }
+
+        XML_Status status = ::XML_ParseBuffer(mParser.get(), bytes_read, bytes_read == 0);
+        if (status != XML_STATUS_OK) {
+            PLOGD("malformed (%s)", ::XML_ErrorString(::XML_GetErrorCode(mParser.get())));
+            mStatus = ERROR_MALFORMED;
+            break;
+        }
+
+        if (bytes_read == 0) {
+            break;
+        }
+    }
+
+    mParser.reset();
+
+    fclose(file);
+    file = nullptr;
+}
+
+// static
+void MediaCodecsXmlParser::Impl::Parser::StartElementHandlerWrapper_override(
+        void *me, const char *name, const char **attrs) {
+    static_cast<MediaCodecsXmlParser::Impl::Parser*>(me)->startElementHandler_override(name, attrs);
+}
+
+// static
+void MediaCodecsXmlParser::Impl::Parser::EndElementHandlerWrapper_override(
+        void *me, const char *name) {
+    static_cast<MediaCodecsXmlParser::Impl::Parser*>(me)->endElementHandler_override(name);
+}
+
+// QTI_END: 2023-12-04: Core: libstagefright: Add support for Media codecs override
 status_t MediaCodecsXmlParser::Impl::Parser::includeXmlFile(const char **attrs) {
     const char *href = nullptr;
     size_t i = 0;
@@ -802,6 +1110,359 @@ void MediaCodecsXmlParser::Impl::Parser::startElementHandler(
 }
 
 void MediaCodecsXmlParser::Impl::Parser::endElementHandler(const char *name) {
+// QTI_BEGIN: 2023-12-04: Core: libstagefright: Add support for Media codecs override
+    // XMLParser handles tag matching, so we really just need to handle the section state here
+    Section section = mState->section();
+    switch (section) {
+        case SECTION_INCLUDE:
+        {
+            // this could also be any of: Included, MediaCodecs
+            if (strEq(name, "Include")) {
+                mState->exitSection();
+                return;
+            }
+            break;
+        }
+
+        case SECTION_SETTINGS:
+        {
+            // this could also be any of: Domain, Variant, Setting
+            if (strEq(name, "Settings")) {
+                mState->exitSection();
+            }
+            break;
+        }
+
+        case SECTION_DECODERS:
+        case SECTION_ENCODERS:
+        case SECTION_UNKNOWN:
+        {
+            mState->exitSection();
+            break;
+        }
+
+        case SECTION_DECODER_TYPE:
+        case SECTION_ENCODER_TYPE:
+        {
+            // this could also be any of: Alias, Limit, Feature
+            if (strEq(name, "Type")) {
+                mState->exitSection();
+                mState->exitCodecOrType();
+            }
+            break;
+        }
+
+        case SECTION_DECODER:
+        case SECTION_ENCODER:
+        {
+            // this could also be any of: Alias, Limit, Quirk, Variant
+            if (strEq(name, "MediaCodec")) {
+                mState->exitSection();
+                mState->exitCodecOrType();
+                mState->exitVariants();
+            }
+            break;
+        }
+
+        case SECTION_VARIANT:
+        {
+            // this could also be any of: Alias, Limit, Quirk
+            if (strEq(name, "Variant")) {
+                mState->exitSection();
+                mState->exitVariants();
+                return;
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
+void MediaCodecsXmlParser::Impl::Parser::startOverrideElementHandler(
+        const char *name, const char **attrs) {
+
+    Section section = mState->section();
+    switch (section) {
+        case SECTION_TOPLEVEL:
+        {
+            Section nextSection;
+            if (strEq(name, "Decoders")) {
+                nextSection = SECTION_DECODERS;
+            } else if (strEq(name, "Encoders")) {
+                nextSection = SECTION_ENCODERS;
+            } else if (strEq(name, "Settings")) {
+                nextSection = SECTION_SETTINGS;
+            }
+            else if (strEq(name, "MediaCodecs") || strEq(name, "Included")) {
+                return;
+            }
+            else {
+                break;
+            }
+            mState->enterSection(nextSection);
+            return;
+        }
+
+        case SECTION_DECODERS:
+        case SECTION_ENCODERS:
+        {
+            if (strEq(name, "MediaCodec")) {
+                if(attrs[0] != nullptr && attrs[1] != nullptr)
+                {
+                    if (strEq(attrs[0], "name")) {
+                        if(section == SECTION_ENCODERS)
+                        {
+                            mState->data().mEncoders_override.push_back(attrs[1]);
+                        }
+                        else
+                        {
+                            mState->data().mDecoders_override.push_back(attrs[1]);
+                        }
+                    }
+                }
+                mState->enterSection(
+                        section == SECTION_DECODERS ? SECTION_DECODERS : SECTION_ENCODERS);
+                return;
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+
+    if (section != SECTION_UNKNOWN) {
+        PLOGD("Ignoring unrecognized tag <%s>", name);
+    }
+    mState->enterSection(SECTION_UNKNOWN);
+}
+
+void MediaCodecsXmlParser::Impl::Parser::endOverrideElementHandler(const char *name) {
+    // XMLParser handles tag matching, so we really just need to handle the section state here
+    Section section = mState->section();
+    switch (section) {
+
+        case SECTION_DECODERS:
+        case SECTION_ENCODERS:
+        case SECTION_UNKNOWN:
+        {
+            mState->exitSection();
+            break;
+        }
+
+        case SECTION_DECODER:
+        case SECTION_ENCODER:
+        {
+            // this could also be any of: Alias, Limit, Quirk, Variant
+            if (strEq(name, "MediaCodec")) {
+                mState->exitSection();
+                mState->exitCodecOrType();
+                mState->exitVariants();
+            }
+            break;
+        }
+
+        case SECTION_VARIANT:
+        {
+            // this could also be any of: Alias, Limit, Quirk
+            if (strEq(name, "Variant")) {
+                mState->exitSection();
+                mState->exitVariants();
+                return;
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
+void MediaCodecsXmlParser::Impl::Parser::startElementHandler_override(
+        const char *name, const char **attrs) {
+    bool inType = true;
+    Result err = NO_INIT;
+
+    Section section = mState->section();
+
+    // handle include at any level
+    if (strEq(name, "Include")) {
+        mState->enterSection(SECTION_INCLUDE);
+        updateStatus(includeXmlFile(attrs));
+        return;
+    }
+
+    // handle include section (top level)
+    if (section == SECTION_INCLUDE) {
+        if (strEq(name, "Included")) {
+            return;
+        }
+        // imitate prior level
+        section = mState->lastNonIncludeSection();
+    }
+
+    switch (section) {
+        case SECTION_TOPLEVEL:
+        {
+            Section nextSection;
+            if (strEq(name, "Decoders")) {
+                nextSection = SECTION_DECODERS;
+            } else if (strEq(name, "Encoders")) {
+                nextSection = SECTION_ENCODERS;
+            } else if (strEq(name, "Settings")) {
+                nextSection = SECTION_SETTINGS;
+            } else if (strEq(name, "MediaCodecs") || strEq(name, "Included")) {
+                return;
+            } else {
+                break;
+            }
+            mState->enterSection(nextSection);
+            return;
+        }
+
+        case SECTION_SETTINGS:
+        {
+            if (strEq(name, "Setting")) {
+                err = addSetting(attrs);
+            } else if (strEq(name, "Variant")) {
+                err = addSetting(attrs, "variant-");
+            } else if (strEq(name, "Domain")) {
+                err = addSetting(attrs, "domain-");
+            } else {
+                break;
+            }
+            updateStatus(err);
+            return;
+        }
+
+        case SECTION_DECODERS:
+        case SECTION_ENCODERS:
+        {
+            if (strEq(name, "MediaCodec")) {
+                if(attrs[0] != nullptr && attrs[1] != nullptr)
+                {
+                    if (strEq(attrs[0], "name")) {
+                        if(section == SECTION_ENCODERS)
+                        {
+                            if (std::find(mState->data().mEncoders_override.begin(),
+                                    mState->data().mEncoders_override.end(), attrs[1]) !=
+                                    mState->data().mEncoders_override.end())
+                            {
+                                mState->enterSection(SECTION_UNKNOWN);
+                            }
+                            else
+                            {
+                                err = enterMediaCodec(attrs, section == SECTION_ENCODERS);
+                                updateStatus(err);
+                                if (err != OK) { // skip this element on error
+                                    mState->enterSection(SECTION_UNKNOWN);
+                                } else {
+                                    mState->enterVariants(mState->codec().variantSet);
+                                    mState->enterSection(
+                                            section == SECTION_DECODERS ? SECTION_DECODER :
+                                            SECTION_ENCODER);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            if ( std::find(mState->data().mDecoders_override.begin(),
+                                    mState->data().mDecoders_override.end(), attrs[1]) !=
+                                    mState->data().mDecoders_override.end() )
+                            {
+                                mState->enterSection(SECTION_UNKNOWN);
+                            }
+                            else
+                            {
+                                err = enterMediaCodec(attrs, section == SECTION_ENCODERS);
+                                updateStatus(err);
+                                if (err != OK) { // skip this element on error
+                                    mState->enterSection(SECTION_UNKNOWN);
+                                } else {
+                                    mState->enterVariants(mState->codec().variantSet);
+                                    mState->enterSection(
+                                            section == SECTION_DECODERS ? SECTION_DECODER :
+                                            SECTION_ENCODER);
+                                }
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            break;
+        }
+
+        case SECTION_DECODER:
+        case SECTION_ENCODER:
+        {
+            if (strEq(name, "Quirk")) {
+                err = addQuirk(attrs, "quirk::");
+            } else if (strEq(name, "Attribute")) {
+                err = addQuirk(attrs, "attribute::");
+            } else if (strEq(name, "Alias")) {
+                err = addAlias(attrs);
+            } else if (strEq(name, "Type")) {
+                err = enterType(attrs);
+                if (err != OK) { // skip this element on error
+                    mState->enterSection(SECTION_UNKNOWN);
+                } else {
+                    mState->enterSection(
+                            section == SECTION_DECODER
+                                    ? SECTION_DECODER_TYPE : SECTION_ENCODER_TYPE);
+                }
+            }
+        }
+        inType = false;
+        FALLTHROUGH_INTENDED;
+
+        case SECTION_DECODER_TYPE:
+        case SECTION_ENCODER_TYPE:
+        case SECTION_VARIANT:
+        {
+            // ignore limits and features specified outside of type
+            if (!mState->inType()
+                    && (strEq(name, "Limit") || strEq(name, "Feature")
+                        || strEq(name, "Variant") || strEq(name, "Mapping")
+                        || strEq(name, "Tuning"))) {
+                PLOGD("ignoring %s specified outside of a Type", name);
+                return;
+            } else if (strEq(name, "Limit")) {
+                err = addLimit(attrs);
+            } else if (strEq(name, "Feature")) {
+                err = addFeature(attrs);
+            } else if (strEq(name, "Mapping")) {
+                err = addMapping(attrs);
+            } else if (strEq(name, "Tuning")) {
+                err = addTuning(attrs);
+            } else if (strEq(name, "Variant") && section != SECTION_VARIANT) {
+                err = limitVariants(attrs);
+                mState->enterSection(err == OK ? SECTION_VARIANT : SECTION_UNKNOWN);
+            } else if (inType
+                    && (strEq(name, "Alias") || strEq(name, "Attribute") || strEq(name, "Quirk"))) {
+                PLOGD("ignoring %s specified not directly in a MediaCodec", name);
+                return;
+            } else if (err == NO_INIT) {
+                break;
+            }
+            updateStatus(err);
+            return;
+        }
+
+        default:
+            break;
+    }
+
+    if (section != SECTION_UNKNOWN) {
+        PLOGD("Ignoring unrecognized tag <%s>", name);
+    }
+    mState->enterSection(SECTION_UNKNOWN);
+}
+
+void MediaCodecsXmlParser::Impl::Parser::endElementHandler_override(const char *name) {
+// QTI_END: 2023-12-04: Core: libstagefright: Add support for Media codecs override
     // XMLParser handles tag matching, so we really just need to handle the section state here
     Section section = mState->section();
     switch (section) {

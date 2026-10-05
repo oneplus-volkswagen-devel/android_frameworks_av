@@ -41,6 +41,9 @@
 #include <media/AudioSystem.h>
 #include <media/MediaMetricsItem.h>
 #include <media/TypeConverter.h>
+// QTI_BEGIN: 2018-08-03: Audio: set mTrackOffload for direct pcm output.
+#include "media/AVMediaExtensions.h"
+// QTI_END: 2018-08-03: Audio: set mTrackOffload for direct pcm output.
 
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
@@ -290,6 +293,7 @@ AudioTrack::AudioTrack(
         const audio_attributes_t* pAttributes,
         bool doNotReconnect,
         float maxRequiredSpeed)
+    : mTrackOffloaded(false)
 {
     mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
 
@@ -1305,7 +1309,13 @@ status_t AudioTrack::setPlaybackRate(const AudioPlaybackRate &playbackRate)
     if (!isSampleRateSpeedAllowed_l(effectiveRate, effectiveSpeed)) {
         ALOGW("%s(%d) (%f, %f) failed (buffer size)",
                 __func__, mPortId, playbackRate.mSpeed, playbackRate.mPitch);
-        return BAD_VALUE;
+// QTI_BEGIN: 2021-05-13: Audio: AudioTrack: Invalidate offloaded track for incompatible buffer size
+        if (!mTrackOffloaded) {
+            return BAD_VALUE;
+        }
+        ALOGD("invalidate track-offloaded track on setPlaybackRate");
+        android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
+// QTI_END: 2021-05-13: Audio: AudioTrack: Invalidate offloaded track for incompatible buffer size
     }
 
     // Check resampler ratios are within bounds
@@ -1339,6 +1349,13 @@ status_t AudioTrack::setPlaybackRate(const AudioPlaybackRate &playbackRate)
                 AMEDIAMETRICS_PROP_PLAYBACK_PITCH, (double)playbackRateTemp.mPitch)
         .record();
 
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+    if (mTrackOffloaded &&
+        !isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+        ALOGD("invalidate track-offloaded track on setPlaybackRate");
+        android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
+    }
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
     return NO_ERROR;
 }
 
@@ -1880,6 +1897,17 @@ status_t AudioTrack::createTrack_l()
             input.clientInfo.clientTid = mAudioTrackThread->getTid();
         }
     }
+// QTI_BEGIN: 2021-09-13: Audio: frameworks: av: enable deep buffer flag when mPlaybackRate is changed
+
+    // enable the deep buffer flag, whenever mPlaybackRate is not equal to
+    // default
+    if (!isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+        mFlags = (audio_output_flags_t)(mFlags | AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
+        ALOGV("%s: mPlaybackRate is changed, request for deep buffer path",
+              __func__);
+    }
+
+// QTI_END: 2021-09-13: Audio: frameworks: av: enable deep buffer flag when mPlaybackRate is changed
     input.sharedBuffer = mSharedBuffer;
     input.notificationsPerBuffer = mNotificationsPerBufferReq;
     input.speed = 1.0;
@@ -1925,6 +1953,9 @@ status_t AudioTrack::createTrack_l()
     }
     ALOG_ASSERT(output.audioTrack != 0);
 
+// QTI_BEGIN: 2018-08-03: Audio: set mTrackOffload for direct pcm output.
+    mTrackOffloaded = AVMediaUtils::get()->AudioTrackIsTrackOffloaded(output.outputId);
+// QTI_END: 2018-08-03: Audio: set mTrackOffload for direct pcm output.
     mFrameCount = output.frameCount;
     mNotificationFramesAct = (uint32_t)output.notificationFrameCount;
     mRoutedDeviceIds = output.selectedDeviceIds;
@@ -2883,13 +2914,25 @@ status_t AudioTrack::restoreTrack_l(const char *from, bool forceRestore)
     ++mSequence;
 
     if (!forceRestore &&
-        (isOffloadedOrDirect_l() || mDoNotReconnect)) {
+        (isOffloadedOrDirect_l() || mDoNotReconnect ||
+        (mOrigFlags & AUDIO_OUTPUT_FLAG_DIRECT) != 0)) {
         // FIXME re-creation of offloaded and direct tracks is not yet implemented;
         // Disabled since (1) timestamp correction is not implemented for non-PCM and
         // (2) We pre-empt existing direct tracks on resource constraint, so these tracks
         // shouldn't reconnect.
-        result = DEAD_OBJECT;
-        return result;
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+
+        // Tear down sink only for non-internal invalidation.
+        // Since new track could again have invalidation on setPlayback rate causing
+        // continuous creation and tear down.
+        if (!mTrackOffloaded ||
+              isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
+            result = DEAD_OBJECT;
+            return result;
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+        }
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
     }
 
     // Save so we can return count since creation.
@@ -3215,7 +3258,7 @@ status_t AudioTrack::getTimestamp_l(AudioTimestamp& timestamp)
     // To avoid a race, read the presented frames first.  This ensures that presented <= consumed.
 
     status_t status;
-    if (isAfTrackOffloadedOrDirect_l()) {
+    if (isOffloadedOrDirect_l()) {
         // use Binder to get timestamp
         media::AudioTimestampInternal ts;
         mAudioTrack->getTimestamp(&ts, &status);
@@ -3332,7 +3375,7 @@ status_t AudioTrack::getTimestamp_l(AudioTimestamp& timestamp)
         ALOGV_IF(status != WOULD_BLOCK, "%s(%d): getTimestamp error:%#x", __func__, mPortId, status);
         return status;
     }
-    if (isAfTrackOffloadedOrDirect_l()) {
+    if (isOffloadedOrDirect_l()) {
         if (isOffloaded_l() && (mState == STATE_PAUSED || mState == STATE_PAUSED_STOPPING)) {
             // use cached paused position in case another offloaded track is running.
             timestamp.mPosition = mPausedPosition;

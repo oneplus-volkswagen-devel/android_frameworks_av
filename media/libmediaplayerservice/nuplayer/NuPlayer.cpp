@@ -62,6 +62,9 @@
 
 #include <media/esds/ESDS.h>
 #include <media/stagefright/Utils.h>
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include "mediaplayerservice/AVNuExtensions.h"
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 
 namespace android {
 
@@ -238,7 +241,9 @@ void NuPlayer::setDataSourceAsync(const sp<IStreamSource> &source) {
     mDataSourceType = DATA_SOURCE_TYPE_STREAM;
 }
 
-static bool IsHTTPLiveURL(const char *url) {
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+bool NuPlayer::IsHTTPLiveURL(const char *url) {
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     if (!strncasecmp("http://", url, 7)
             || !strncasecmp("https://", url, 8)
             || !strncasecmp("file://", url, 7)) {
@@ -1614,7 +1619,9 @@ void NuPlayer::onStart(int64_t startPositionUs, MediaPlayerSeekMode mode) {
     sp<AMessage> notify = new AMessage(kWhatRendererNotify, this);
     ++mRendererGeneration;
     notify->setInt32("generation", mRendererGeneration);
-    mRenderer = new Renderer(mAudioSink, mMediaClock, notify, flags);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    mRenderer = AVNuFactory::get()->createRenderer(mAudioSink, mMediaClock, notify, flags);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     mRendererLooper = new ALooper;
     mRendererLooper->setName("NuPlayerRenderer");
     mRendererLooper->start(false, false, ANDROID_PRIORITY_AUDIO);
@@ -1998,12 +2005,19 @@ status_t NuPlayer::instantiateDecoder(
 
             const bool hasVideo = (mSource->getFormat(false /*audio */) != NULL);
             format->setInt32("has-video", hasVideo);
-            *decoder = new DecoderPassThrough(notify, mSource, mRenderer);
-            ALOGV("instantiateDecoder audio DecoderPassThrough  hasVideo: %d", hasVideo);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+            *decoder = AVNuFactory::get()->createPassThruDecoder(notify, mSource, mRenderer);
+            ALOGV("instantiateDecoder audio DecoderPassThrough hasVideo: %d", hasVideo);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
         } else {
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+            AVNuUtils::get()->setCodecOutputFormat(format);
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
             mSource->setOffloadAudio(false /* offload */);
 
-            *decoder = new Decoder(notify, mSource, mPID, mUID, mRenderer);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+            *decoder = AVNuFactory::get()->createDecoder(notify, mSource, mPID, mUID, mRenderer);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             ALOGV("instantiateDecoder audio Decoder");
         }
         mAudioDecoderError = false;
@@ -2786,6 +2800,13 @@ void NuPlayer::onSourceNotify(const sp<AMessage> &msg) {
             sp<AMessage> IMSRxNotice;
             CHECK(msg->findMessage("message", &IMSRxNotice));
             sendIMSRxNotice(IMSRxNotice);
+            break;
+        }
+
+        case Source::kWhatRTCPByeReceived:
+        {
+            ALOGV("notify the client that Bye message is received");
+            notifyListener(MEDIA_INFO, 2000, 0);
             break;
         }
 

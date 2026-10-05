@@ -40,6 +40,10 @@
 #include <utils/String8.h>
 #include <cutils/properties.h>
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include <stagefright/AVExtensions.h>
+
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 #if LOG_NDEBUG
 #define UNUSED_UNLESS_VERBOSE(x) (void)(x)
 #else
@@ -254,6 +258,14 @@ status_t CameraSource::isCameraColorFormatSupported(
     return OK;
 }
 
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+static int32_t getHighSpeedFrameRate(const CameraParameters& params) {
+    const char* hsr = params.get("video-hsr");
+    int32_t rate = (hsr != NULL && strncmp(hsr, "off", 3)) ? atoi(hsr) : 0;
+    return rate > 240 ? 240 : rate;
+}
+
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
 /*
  * Configure the camera to use the requested video size
  * (width and height) and/or frame rate. If both width and
@@ -301,11 +313,19 @@ status_t CameraSource::configureCamera(
     }
 
     if (frameRate != -1) {
-        CHECK(frameRate > 0 && frameRate <= 120);
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+        CHECK(frameRate > 0 && frameRate <= 240);
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
         const char* supportedFrameRates =
                 params->get(CameraParameters::KEY_SUPPORTED_PREVIEW_FRAME_RATES);
         CHECK(supportedFrameRates != NULL);
         ALOGV("Supported frame rates: %s", supportedFrameRates);
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+        if (getHighSpeedFrameRate(*params)) {
+            ALOGI("Use default 30fps for HighSpeed %dfps", frameRate);
+            frameRate = 30;
+        }
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
         char buf[4];
         snprintf(buf, 4, "%d", frameRate);
         if (strstr(supportedFrameRates, buf) == NULL) {
@@ -407,6 +427,10 @@ status_t CameraSource::checkFrameRate(
         ALOGE("Failed to retrieve preview frame rate (%d)", frameRateActual);
         return UNKNOWN_ERROR;
     }
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+    int32_t highSpeedRate = getHighSpeedFrameRate(params);
+    frameRateActual = highSpeedRate ? highSpeedRate : frameRateActual;
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
 
     // Check the actual video frame rate against the target/requested
     // video frame rate.
@@ -492,6 +516,12 @@ status_t CameraSource::initBufferQueue(uint32_t width, uint32_t height,
     mVideoBufferProducer = surface->getIGraphicBufferProducer();
 #endif  // WB_LIBCAMERASERVICE_WITH_DEPENDENCIES
 
+// QTI_BEGIN: 2025-05-05: Camera: Stagefright: add NULL check before accessing param am: 04f7151910
+    if (mVideoBufferConsumer == nullptr) {
+        return -1;
+    }
+
+// QTI_END: 2025-05-05: Camera: Stagefright: add NULL check before accessing param am: 04f7151910
     status_t res = mVideoBufferConsumer->setDefaultBufferSize(width, height);
     if (res != OK) {
         ALOGE("%s: Could not set buffer dimensions %dx%d: %s (%d)", __FUNCTION__, width, height,
@@ -606,6 +636,9 @@ status_t CameraSource::initWithCameraAccess(
     mMeta->setInt32(kKeyStride,      mVideoSize.width);
     mMeta->setInt32(kKeySliceHeight, mVideoSize.height);
     mMeta->setInt32(kKeyFrameRate,   mVideoFrameRate);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    AVUtils::get()->extractCustomCameraKeys(params, mMeta);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     return OK;
 }
 

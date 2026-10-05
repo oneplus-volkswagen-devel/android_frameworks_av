@@ -27,6 +27,8 @@
 #include <media/stagefright/foundation/hexdump.h>
 #include <media/stagefright/foundation/ByteUtils.h>
 
+#include <mediaplayerservice/AVMediaServiceExtensions.h>
+
 namespace android {
 
 AH263Assembler::AH263Assembler(const sp<AMessage> &notify)
@@ -63,7 +65,14 @@ ARTPAssembler::AssemblyStatus AH263Assembler::addPacket(
             if ((uint32_t)(*it)->int32Data() >= mNextExpectedSeqNo) {
                 break;
             }
-
+// QTI_BEGIN: 2019-05-06: Video: av: Strip avextension modifications for libmedia2_jni
+#ifndef __NO_AVEXTENSIONS__
+// QTI_END: 2019-05-06: Video: av: Strip avextension modifications for libmedia2_jni
+            AVMediaServiceUtils::get()->addH263AdvancedPacket(
+                    *it, &mPackets, mAccessUnitRTPTime);
+// QTI_BEGIN: 2019-05-06: Video: av: Strip avextension modifications for libmedia2_jni
+#endif
+// QTI_END: 2019-05-06: Video: av: Strip avextension modifications for libmedia2_jni
             it = queue->erase(it);
         }
 

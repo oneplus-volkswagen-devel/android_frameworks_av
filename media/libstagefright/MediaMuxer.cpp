@@ -39,6 +39,9 @@
 #include <media/stagefright/MPEG4Writer.h>
 #include <media/stagefright/OggWriter.h>
 #include <media/stagefright/Utils.h>
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include <stagefright/AVExtensions.h>
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 
 namespace flags_camera = com::android::internal::camera::flags;
 

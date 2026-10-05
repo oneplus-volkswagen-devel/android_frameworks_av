@@ -43,6 +43,10 @@ using ::android::base::StringPrintf;
 
 static const int kDumpLockRetries = 50;
 static const int kDumpLockSleepUs = 20000;
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include "mediaplayerservice/AVNuExtensions.h"
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include "mediaplayerservice/AVMediaServiceExtensions.h"
 
 namespace android {
 
@@ -89,7 +93,9 @@ NuPlayerDriver::NuPlayerDriver(pid_t pid)
       mRebufferingAtExit(false),
       mLooper(new ALooper),
       mMediaClock(new MediaClock),
-      mPlayer(new NuPlayer(pid, mMediaClock)),
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+      mPlayer(AVNuFactory::get()->createNuPlayer(pid, mMediaClock)),
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
       mPlayerFlags(0),
       mCachedPlayerIId(PLAYER_PIID_INVALID),
       mMetricsItem(NULL),
@@ -190,6 +196,9 @@ status_t NuPlayerDriver::setDataSource(int fd, int64_t offset, int64_t length) {
     }
     ATRACE_END();
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    AVNuUtils::get()->printFileName(fd);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     return mAsyncResult;
 }
 
@@ -907,6 +916,8 @@ status_t NuPlayerDriver::getMetadata(
     meta.appendBool(
             Metadata::kSeekAvailable,
             mPlayerFlags & NuPlayer::Source::FLAG_CAN_SEEK);
+
+    AVMediaServiceUtils::get()->appendMeta(&meta);
 
     return OK;
 }

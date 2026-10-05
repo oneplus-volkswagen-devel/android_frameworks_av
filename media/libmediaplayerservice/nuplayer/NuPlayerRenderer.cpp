@@ -37,6 +37,12 @@
 #include <utils/SystemClock.h>
 
 #include <inttypes.h>
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+#include "mediaplayerservice/AVNuExtensions.h"
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include "stagefright/AVExtensions.h"
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 
 #include <android-base/stringprintf.h>
 using ::android::base::StringPrintf;
@@ -2032,9 +2038,16 @@ status_t NuPlayer::Renderer::onOpenAudioSink(
                     "audio_format", mime.c_str());
             onDisableOffloadAudio();
         } else {
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+            int32_t bitWidth = 16;
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             ALOGV("Mime \"%s\" mapped to audio_format 0x%x",
                     mime.c_str(), audioFormat);
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+            audioFormat = AVUtils::get()->updateAudioFormat(audioFormat, format);
+            bitWidth = AVUtils::get()->getAudioSampleBits(format);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             int avgBitRate = 0;
             format->findInt32("bitrate", &avgBitRate);
 
@@ -2042,11 +2055,28 @@ status_t NuPlayer::Renderer::onOpenAudioSink(
             if (audioFormat == AUDIO_FORMAT_AAC
                     && format->findInt32("aac-profile", &aacProfile)) {
                 // Redefine AAC format as per aac profile
-                mapAACProfileToAudioFormat(
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+                int32_t isADTSSupported;
+                isADTSSupported = AVUtils::get()->mapAACProfileToAudioFormat(format,
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
                         audioFormat,
                         aacProfile);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+                if (!isADTSSupported) {
+                    mapAACProfileToAudioFormat(audioFormat,
+                            aacProfile);
+                } else {
+                    ALOGV("Format is AAC ADTS\n");
+                }
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             }
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+            int32_t offloadBufferSize =
+                                    AVUtils::get()->getAudioMaxInputBufferSize(
+                                                   audioFormat,
+                                                   format);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             audio_offload_info_t offloadInfo = AUDIO_INFO_INITIALIZER;
             offloadInfo.duration_us = -1;
             format->findInt64(
@@ -2054,9 +2084,15 @@ status_t NuPlayer::Renderer::onOpenAudioSink(
             offloadInfo.sample_rate = sampleRate;
             offloadInfo.channel_mask = channelMask;
             offloadInfo.format = audioFormat;
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+            offloadInfo.bit_width = bitWidth;
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
             offloadInfo.stream_type = AUDIO_STREAM_MUSIC;
             offloadInfo.bit_rate = avgBitRate;
             offloadInfo.has_video = hasVideo;
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+            offloadInfo.offload_buffer_size = offloadBufferSize;
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             offloadInfo.is_streaming = isStreaming;
 
             if (memcmp(&mCurrentOffloadInfo, &offloadInfo, sizeof(offloadInfo)) == 0) {

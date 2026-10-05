@@ -118,8 +118,15 @@ const MediaProfiles::NameToTagMap MediaProfiles::sAudioEncoderNameMap[] = {
     {"amrwb",  AUDIO_ENCODER_AMR_WB},
     {"aac",    AUDIO_ENCODER_AAC},
     {"heaac",  AUDIO_ENCODER_HE_AAC},
+    {"heaacps", AUDIO_ENCODER_HE_AAC_PS},
     {"aaceld", AUDIO_ENCODER_AAC_ELD},
-    {"opus",   AUDIO_ENCODER_OPUS}
+    {"opus",   AUDIO_ENCODER_OPUS},
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+    {"lpcm",  AUDIO_ENCODER_LPCM},
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
+// QTI_BEGIN: 2023-02-28: Audio: media: add new enum for HE-AAC V2
+    {"heaac_v2",  AUDIO_ENCODER_HE_AAC_V2},
+// QTI_END: 2023-02-28: Audio: media: add new enum for HE-AAC V2
 };
 
 const MediaProfiles::NameToTagMap MediaProfiles::sFileFormatMap[] = {
@@ -1177,6 +1184,9 @@ MediaProfiles::createDefaultCamcorderProfiles(MediaProfiles *profiles)
 MediaProfiles::createDefaultAudioEncoders(MediaProfiles *profiles)
 {
     profiles->mAudioEncoders.add(createDefaultAmrNBEncoderCap());
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+    profiles->mAudioEncoders.add(createDefaultLpcmEncoderCap());
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
 }
 
 /*static*/ void
@@ -1211,6 +1221,16 @@ MediaProfiles::createDefaultAmrNBEncoderCap()
         AUDIO_ENCODER_AMR_NB, 5525, 12200, 8000, 8000, 1, 1);
 }
 
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+
+/*static*/ MediaProfiles::AudioEncoderCap*
+MediaProfiles::createDefaultLpcmEncoderCap()
+{
+    return new MediaProfiles::AudioEncoderCap(
+        AUDIO_ENCODER_LPCM, 768000, 4608000, 8000, 48000, 1, 6);
+}
+
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
 /*static*/ void
 MediaProfiles::createDefaultImageEncodingQualityLevels(MediaProfiles *profiles)
 {

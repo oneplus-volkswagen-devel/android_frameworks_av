@@ -51,6 +51,10 @@ cc_defaults {
         "libstagefright_headers",
         "libstagefright_rtsp_headers",
     ],
+    include_dirs: [
+        "frameworks/av/media/libavextensions",
+        "frameworks/av/media/libmediaplayerservice",
+    ],
 
     arch: {
         arm: {
@@ -94,7 +98,9 @@ cc_library_static {
 
 cc_library_static {
     name: "libstagefright_rtsp_player2",
-
+    // QTI_BEGIN: 2019-05-06: Video: av: Strip avextension modifications for libmedia2_jni
+    cflags: ["-D__NO_AVEXTENSIONS__"],
+    // QTI_END: 2019-05-06: Video: av: Strip avextension modifications for libmedia2_jni
     srcs: ["NetworkUtilsForAppProc.cpp"],
     defaults: ["libstagefright_rtsp_defaults"],
 }

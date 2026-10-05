@@ -1876,9 +1876,6 @@ void Track::setTeePatchesToUpdate_l(TeePatches teePatchesToUpdate) {
 
 status_t Track::getTimestamp(AudioTimestamp& timestamp)
 {
-    if (!isOffloaded() && !isDirect()) {
-        return INVALID_OPERATION; // normal tracks handled through SSQ
-    }
     const sp<IAfThreadBase> thread = mThread.promote();
     if (thread == 0) {
         return INVALID_OPERATION;

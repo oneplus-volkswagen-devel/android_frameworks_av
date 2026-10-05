@@ -17,9 +17,10 @@ license {
     ],
 }
 
-cc_library_shared {
-    name: "libstagefright_omx",
-    vendor_available: true,
+// QTI_BEGIN: 2018-06-21: Video: media: VNDK ABI compliance
+cc_defaults {
+    name: "libstagefright_omx_defaults",
+    // QTI_END: 2018-06-21: Video: media: VNDK ABI compliance
     double_loadable: true,
 
     srcs: [
@@ -47,7 +48,33 @@ cc_library_shared {
     export_header_lib_headers: [
         "media_plugin_headers",
     ],
+    // QTI_BEGIN: 2018-06-21: Video: media: VNDK ABI compliance
 
+    sanitize: {
+        misc_undefined: [
+            "signed-integer-overflow",
+            "unsigned-integer-overflow",
+        ],
+        cfi: true,
+        diag: {
+            cfi: true,
+        },
+    },
+}
+
+cc_library_shared {
+    name: "libstagefright_omx",
+    vendor_available: true,
+
+    export_shared_lib_headers: [
+        "libmedia_omx",
+        "libstagefright_foundation",
+        "libstagefright_xmlparser",
+        "libutils",
+    ],
+
+    defaults: ["libstagefright_omx_defaults"],
+    // QTI_END: 2018-06-21: Video: media: VNDK ABI compliance
     shared_libs: [
         "libbase",
         "libbinder",
@@ -68,20 +95,14 @@ cc_library_shared {
         "android.hardware.media.omx@1.0",
         "android.hardware.graphics.bufferqueue@1.0",
     ],
-
-    export_shared_lib_headers: [
-        "libstagefright_foundation",
-        "libstagefright_xmlparser",
-        "libutils",
-    ],
-
+    // QTI_BEGIN: 2018-06-21: Video: media: VNDK ABI compliance
     cflags: [
         "-Werror",
         "-Wall",
         "-Wno-unused-parameter",
         "-Wno-documentation",
     ],
-
+    // QTI_END: 2018-06-21: Video: media: VNDK ABI compliance
     sanitize: {
         misc_undefined: [
             "signed-integer-overflow",
@@ -89,9 +110,10 @@ cc_library_shared {
         ],
         cfi: true,
     },
-
+    // QTI_BEGIN: 2018-06-21: Video: media: VNDK ABI compliance
 }
 
+// QTI_END: 2018-06-21: Video: media: VNDK ABI compliance
 cc_library_shared {
     name: "libstagefright_softomx",
     vendor_available: true,
@@ -163,6 +185,7 @@ cc_library_shared {
         "libstagefright_foundation",
         "liblog",
         "libutils",
+        "libcutils",
     ],
 
     cflags: [
@@ -186,9 +209,21 @@ cc_library_shared {
     vendor_available: true,
     double_loadable: true,
     srcs: ["OMXUtils.cpp"],
+    // QTI_BEGIN: 2018-04-13: Video: media: Add new Component Roles
+    include_dirs: [
+        "frameworks/av/media/libstagefright/include",
+    ],
+    // QTI_END: 2018-04-13: Video: media: Add new Component Roles
     export_include_dirs: [
         "include",
     ],
+    // QTI_BEGIN: 2018-04-13: Video: media: Add new Component Roles
+    target: {
+        vendor: {
+            cflags: ["-D__ANDROID_VNDK__"],
+        },
+    },
+    // QTI_END: 2018-04-13: Video: media: Add new Component Roles
     header_libs: [
         "media_plugin_headers",
     ],

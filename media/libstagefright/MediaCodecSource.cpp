@@ -39,6 +39,12 @@
 #include <media/stagefright/MediaErrors.h>
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/Utils.h>
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include <stagefright/AVExtensions.h>
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
+#include <OMX_Core.h>
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
 
 #include <android_media_mediarecorder.h>
 
@@ -348,6 +354,9 @@ sp<MediaCodecSource> MediaCodecSource::Create(
         uint32_t flags) {
     sp<MediaCodecSource> mediaSource = new MediaCodecSource(
             looper, format, source, persistentSurface, flags);
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+    AVUtils::get()->getHFRParams(&mediaSource->mIsHFR, &mediaSource->mBatchSize, format);
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
 
     if (mediaSource->init() == OK) {
         return mediaSource;
@@ -423,7 +432,81 @@ status_t MediaCodecSource::read(
     return output->mErrorCode;
 }
 
+// QTI_BEGIN: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
+// Named metadata key for the EncoderOutputBufferHolder stored in MediaBuffer::meta_data().
+// MetaDataBase only provides setPointer/findPointer, so the holder is stored as a raw pointer
+// with lifetime managed via incStrong/decStrong (see CB_OUTPUT_AVAILABLE and signalBufferReturned).
+static constexpr uint32_t kKeyEncoderOutputBufferHolder = 'eobi';
+
+// Keeps the encoder output buffer alive and carries the slot index + encoder reference
+// for deferred releaseOutputBuffer() in signalBufferReturned().
+//
+// Design notes:
+//  - mEncoder is captured at construction time (on the looper thread) to avoid
+//    cross-thread access to MediaCodecSource::mEncoder from signalBufferReturned()
+//    (writer thread), eliminating the TOCTOU race present when reading mEncoder
+//    directly from the writer thread.
+//  - releaseOnce() is idempotent.  The destructor calls it as a safety net so that
+//    releaseOutputBuffer() is always invoked even on error/stop paths that drain
+//    the output queue without going through signalBufferReturned().
+//  - mReleased does not need to be std::atomic: releaseOnce() is called either from
+//    signalBufferReturned() (which holds a local sp<> keeping the object alive and
+//    preventing the destructor from running concurrently) or from the destructor when
+//    the last sp<> is released.  These two paths are mutually exclusive by the
+//    sp<>/RefBase ref-counting contract, so a plain bool is sufficient.
+struct EncoderOutputBufferHolder : public RefBase {
+    EncoderOutputBufferHolder(const sp<MediaCodecBuffer>& outbuf,
+                               int32_t index,
+                               const sp<MediaCodec>& encoder)
+        : mOutbuf(outbuf), mIndex(index), mEncoder(encoder), mReleased(false) {}
+
+    // Idempotent: safe to call from signalBufferReturned() and from the destructor.
+    void releaseOnce() {
+        if (!mReleased && mEncoder != nullptr) {
+            mReleased = true;
+            ALOGV("[eobi] releaseOutputBuffer slot=%d", mIndex);
+            mEncoder->releaseOutputBuffer(mIndex);
+        }
+    }
+
+    ~EncoderOutputBufferHolder() override {
+        // Safety net: if signalBufferReturned() was never called (e.g. error/stop path
+        // drains mOutput.mBufferQueue), release the encoder slot here so it is never
+        // permanently occupied.
+        if (!mReleased) {
+            ALOGW("[eobi] destructor safety-net: signalBufferReturned() was not called, "
+                  "releasing slot=%d now", mIndex);
+        }
+        releaseOnce();
+    }
+
+    sp<MediaCodecBuffer> mOutbuf;   // keeps encoder output buffer alive until writer is done
+    int32_t              mIndex;    // encoder output slot index for releaseOutputBuffer()
+    sp<MediaCodec>       mEncoder;  // captured at creation; avoids cross-thread mEncoder access
+    bool                 mReleased; // guards against double-release (see note above)
+};
+// QTI_END: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
+
 void MediaCodecSource::signalBufferReturned(MediaBufferBase *buffer) {
+// QTI_BEGIN: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
+    // Release the encoder output buffer now that the writer is done with the data.
+    // MetaDataBase only provides setPointer/findPointer (no setObject/findObject), so we
+    // use findPointer to retrieve the raw pointer stored at buffer creation time.
+    // The matching decStrong() below balances the incStrong() done at creation.
+    // releaseOnce() is called before decStrong() so the encoder slot is freed first;
+    // decStrong() then drops the ref count to 0, triggering the destructor which calls
+    // releaseOnce() again — but mReleased is already true, so it is a no-op.
+    void *ptr = nullptr;
+    if (buffer->meta_data().findPointer(kKeyEncoderOutputBufferHolder, &ptr) && ptr != nullptr) {
+        EncoderOutputBufferHolder *holder = static_cast<EncoderOutputBufferHolder*>(ptr);
+        ALOGV("[eobi] signalBufferReturned: releasing holder for slot=%d", holder->mIndex);
+        holder->releaseOnce();
+        holder->decStrong(nullptr);
+        // mOutbuf is released here (ref count reaches 0 → destructor runs → mOutbuf sp<> cleared).
+    } else {
+        ALOGW("[eobi] signalBufferReturned: no EncoderOutputBufferHolder found in buffer metadata");
+    }
+// QTI_END: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
     buffer->setObserver(0);
     buffer->release();
 }
@@ -474,7 +557,12 @@ MediaCodecSource::MediaCodecSource(
       mFirstSampleSystemTimeUs(-1LL),
       mPausePending(false),
       mFirstSampleTimeUs(-1LL),
-      mGeneration(0) {
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+      mGeneration(0),
+      mPrevBufferTimestampUs(0),
+      mIsHFR(false),
+      mBatchSize(0){
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
     CHECK(mLooper != NULL);
 
     if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
@@ -569,14 +657,29 @@ status_t MediaCodecSource::initEncoder() {
                     MediaCodec::CONFIGURE_FLAG_ENCODE);
     } else {
         Vector<AString> matchingCodecs;
-        MediaCodecList::findMatchingCodecs(
-                outputMIME.c_str(), true /* encoder */,
-                ((mFlags & FLAG_PREFER_SOFTWARE_CODEC) ? MediaCodecList::kPreferSoftwareCodecs : 0),
-                &matchingCodecs);
+// QTI_BEGIN: 2018-02-19: Audio: frameworks/av: enable audio extended features
+        bool useQcHwEnc = AVUtils::get()->useQCHWEncoder(mOutputFormat, &matchingCodecs);
+        if (!useQcHwEnc) {
+            MediaCodecList::findMatchingCodecs(
+                    outputMIME.c_str(), true /* encoder */,
+                    ((mFlags & FLAG_PREFER_SOFTWARE_CODEC) ? MediaCodecList::kPreferSoftwareCodecs : 0),
+                    &matchingCodecs);
+// QTI_END: 2018-02-19: Audio: frameworks/av: enable audio extended features
+// QTI_BEGIN: 2018-02-07: Audio: PPR1.180130.002_AOSP_Merge
+        }
+// QTI_END: 2018-02-07: Audio: PPR1.180130.002_AOSP_Merge
+// QTI_BEGIN: 2023-06-26: Video: StagefrightRecorder: propagate calling pid/uid to MediaCodec
+        int32_t callingPid = MediaCodec::kNoPid;
+        int32_t callingUid = MediaCodec::kNoUid;
+        mOutputFormat->findInt32("calling-pid", &callingPid);
+        mOutputFormat->findInt32("calling-uid", &callingUid);
 
+// QTI_END: 2023-06-26: Video: StagefrightRecorder: propagate calling pid/uid to MediaCodec
         for (size_t ix = 0; ix < matchingCodecs.size(); ++ix) {
             mEncoder = MediaCodec::CreateByComponentName(
-                    mCodecLooper, matchingCodecs[ix]);
+// QTI_BEGIN: 2023-06-26: Video: StagefrightRecorder: propagate calling pid/uid to MediaCodec
+                    mCodecLooper, matchingCodecs[ix], NULL, callingPid, callingUid);
+// QTI_END: 2023-06-26: Video: StagefrightRecorder: propagate calling pid/uid to MediaCodec
 
             if (mEncoder == NULL) {
                 continue;
@@ -590,11 +693,22 @@ status_t MediaCodecSource::initEncoder() {
             mEncoderActivityNotify = new AMessage(kWhatEncoderActivity, mReflector);
             mEncoder->setCallback(mEncoderActivityNotify);
 
+// QTI_BEGIN: 2022-07-15: Video: libstagefright: limit configuring block model for hw encoders
+            AString codecName = matchingCodecs[ix];
+            bool isHWEnc = codecName.startsWith("c2.qti");
+
+// QTI_END: 2022-07-15: Video: libstagefright: limit configuring block model for hw encoders
             err = mEncoder->configure(
                         mOutputFormat,
                         NULL /* nativeWindow */,
                         NULL /* crypto */,
-                        MediaCodec::CONFIGURE_FLAG_ENCODE);
+// QTI_BEGIN: 2021-10-07: Video: libstagefright: Configure camcorder encoder session with
+                        MediaCodec::CONFIGURE_FLAG_ENCODE |
+// QTI_END: 2021-10-07: Video: libstagefright: Configure camcorder encoder session with
+// QTI_BEGIN: 2023-01-01: Video: MediaCodec:configuring block model for encoders
+                        ((mIsVideo && isHWEnc && (mFlags & FLAG_USE_SURFACE_INPUT)) ?
+                         MediaCodec::CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
+// QTI_END: 2023-01-01: Video: MediaCodec:configuring block model for encoders
 
             if (err == OK) {
                 break;
@@ -628,6 +742,12 @@ status_t MediaCodecSource::initEncoder() {
         if (err != OK) {
             return err;
         }
+// QTI_BEGIN: 2022-03-17: Video: libstagefright: Adding NULL check for codec instance
+        if (mEncoder == NULL) {
+            ALOGE("initEncoder : mEncoder is null");
+            return BAD_VALUE;
+        }
+// QTI_END: 2022-03-17: Video: libstagefright: Adding NULL check for codec instance
     }
 
     sp<AMessage> inputFormat;
@@ -696,6 +816,13 @@ void MediaCodecSource::signalEOS(status_t err) {
         if (!reachedEOS) {
             ALOGV("encoder (%s) reached EOS", mIsVideo ? "video" : "audio");
             // release all unread media buffers
+// QTI_BEGIN: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
+            if (!output->mBufferQueue.empty()) {
+                ALOGD("[eobi] signalEOS: draining %zu queued buffer(s) with err=0x%x; "
+                      "EncoderOutputBufferHolder slots will be released via signalBufferReturned()",
+                      output->mBufferQueue.size(), err);
+            }
+// QTI_END: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
             for (List<MediaBufferBase*>::iterator it = output->mBufferQueue.begin();
                     it != output->mBufferQueue.end(); it++) {
                 (*it)->release();
@@ -703,10 +830,19 @@ void MediaCodecSource::signalEOS(status_t err) {
             output->mBufferQueue.clear();
             output->mEncoderReachedEOS = true;
             output->mErrorCode = err;
+// QTI_BEGIN: 2018-04-20: Video: libstagefright: Handling SSR/Hardware error in Camcorder
+            if (err != ERROR_END_OF_STREAM) {
+// QTI_END: 2018-04-20: Video: libstagefright: Handling SSR/Hardware error in Camcorder
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
+                output->mErrorCode = ERROR_IO;
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
+            }
             if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
                 mStopping = true;
                 mPuller->stop();
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
             }
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
             output->mCond.signal();
 
             reachedEOS = true;
@@ -770,12 +906,24 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
                     return OK;
                 }
             }
-
+// QTI_BEGIN: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
+            mInputBufferTimeOffsetUs = AVUtils::get()->overwriteTimeOffset(mIsHFR,
+                mInputBufferTimeOffsetUs, &mPrevBufferTimestampUs, timeUs, mBatchSize);
+// QTI_END: 2018-05-04: Video: stagefright: add changes related to high-framerates in CameraSource
             timeUs += mInputBufferTimeOffsetUs;
 
             // push decoding time for video, or drift time for audio
             if (mIsVideo) {
                 mDecodingTimeQueue.push_back(timeUs);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+                if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+// QTI_BEGIN: 2019-03-19: Video: stagefright: pass time offset to avenhancement
+                    AVUtils::get()->addDecodingTimesFromBatch(mbuf, mDecodingTimeQueue, mInputBufferTimeOffsetUs);
+// QTI_END: 2019-03-19: Video: stagefright: pass time offset to avenhancement
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+                }
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
             } else {
 #if DEBUG_DRIFT_TIME
                 if (mFirstSampleTimeUs < 0ll) {
@@ -796,7 +944,9 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
             if (err != OK || inbuf == NULL || inbuf->data() == NULL
                     || mbuf->data() == NULL || mbuf->size() == 0) {
                 mbuf->release();
-                signalEOS();
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
+                signalEOS(err);
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
                 break;
             }
 
@@ -987,7 +1137,9 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
             sp<MediaCodecBuffer> outbuf;
             status_t err = mEncoder->getOutputBuffer(index, &outbuf);
             if (err != OK || outbuf == NULL || outbuf->data() == NULL) {
-                signalEOS();
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
+                signalEOS(err);
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
                 break;
             } else if (outbuf->size() == 0) {
                 // Zero length CSD buffers are not treated as an error
@@ -999,7 +1151,29 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                 break;
             }
 
-            MediaBufferBase *mbuf = new MediaBuffer(outbuf->size());
+// QTI_BEGIN: 2018-03-05: Audio: PPR1.180227.001_AOSP_Merge.
+// QTI_BEGIN: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
+            // Wrap outbuf data directly to avoid malloc() + memcpy() at MediaCodecSource layer.
+            // EncoderOutputBufferHolder keeps outbuf alive, carries the slot index and a
+            // captured sp<MediaCodec> for deferred releaseOutputBuffer() in signalBufferReturned().
+            // incStrong() adds one strong reference; the matching decStrong() is in
+            // signalBufferReturned().  MetaDataBase only provides setPointer/findPointer, so we
+            // store the raw pointer and manage lifetime manually via incStrong/decStrong.
+            // Note: setPointer is called on mbuf->meta_data() directly (MetaDataBase&) before
+            // the 'meta' copy below, so the key is present in mbuf's own metadata and will be
+            // found by signalBufferReturned() via buffer->meta_data().findPointer().
+            EncoderOutputBufferHolder *holder =
+                    new EncoderOutputBufferHolder(outbuf, index, mEncoder);
+            holder->incStrong(nullptr);
+            MediaBuffer *mbuf = new MediaBuffer(outbuf->data(), outbuf->size());
+            mbuf->meta_data().setPointer(kKeyEncoderOutputBufferHolder, holder);
+// QTI_END: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
+            sp<MetaData> meta = new MetaData(mbuf->meta_data());
+// QTI_END: 2018-03-05: Audio: PPR1.180227.001_AOSP_Merge.
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+            AVUtils::get()->setDeferRelease(meta);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+
             mbuf->setObserver(this);
             mbuf->add_ref();
 
@@ -1053,15 +1227,16 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
             if (flags & MediaCodec::BUFFER_FLAG_SYNCFRAME) {
                 mbuf->meta_data().setInt32(kKeyIsSyncFrame, true);
             }
-            memcpy(mbuf->data(), outbuf->data(), outbuf->size());
+// QTI_BEGIN: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
+            // memcpy removed: data is mapped directly from encoder output buffer.
+            // releaseOutputBuffer() is deferred to signalBufferReturned().
+// QTI_END: 2026-03-02: Video: CCodec: Avoid memcpy for encoder output buffers in MediaCodecSource
 
             {
                 Mutexed<Output>::Locked output(mOutput);
                 output->mBufferQueue.push_back(mbuf);
                 output->mCond.signal();
             }
-
-            mEncoder->releaseOutputBuffer(index);
        } else if (cbID == MediaCodec::CB_ERROR) {
             status_t err;
             CHECK(msg->findInt32("err", &err));
@@ -1071,7 +1246,9 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                 mStopping = true;
                 mPuller->stop();
             }
-            signalEOS();
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
+            signalEOS(err);
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
        }
        // MediaCodec::CB_CRYPTO_ERROR is unexpected as we are not using crypto
        // MediaCodec::CB_LARGE_FRAME_OUTPUT_AVAILABLE is unexpected as we are not using large frames
@@ -1158,6 +1335,9 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         if (generation != mGeneration) {
              break;
         }
+
+        releaseEncoder();
+
         ALOGD("source (%s) stopping stalled", mIsVideo ? "video" : "audio");
         signalEOS();
         break;
@@ -1235,4 +1415,13 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
     }
 }
 
+// QTI_BEGIN: 2018-05-17: Video: stagefright: Fix recording issues when EIS enabled
+void MediaCodecSource::notifyPerformanceMode() {
+    if (mIsVideo && mEncoder != NULL) {
+        sp<AMessage> params = new AMessage;
+        params->setInt32("qti.request.perf", true);
+        mEncoder->setParameters(params);
+    }
+}
+// QTI_END: 2018-05-17: Video: stagefright: Fix recording issues when EIS enabled
 } // namespace android

@@ -94,8 +94,6 @@ public:
     virtual void presentationComplete();
 
 protected:
-    uint64_t mFramesWritten = 0; // reset by flush
-    uint64_t mFramesWrittenAtStandby = 0;
     int mRateMultiplier = 1;
     bool mHalFormatHasProportionalFrames = false;
     size_t mHalFrameSize = 0;

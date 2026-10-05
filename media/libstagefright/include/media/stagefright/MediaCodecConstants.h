@@ -360,6 +360,11 @@ inline static const char *asString_VP9Level(int32_t i, const char *def = "??") {
 
 inline constexpr int32_t AV1ProfileMain8 = 0x1;
 inline constexpr int32_t AV1ProfileMain10 = 0x2;
+inline constexpr int32_t AV1ProfileHigh8 = 0x4;
+inline constexpr int32_t AV1ProfileHigh10 = 0x8;
+inline constexpr int32_t AV1ProfileProfessional8 = 0x10;
+inline constexpr int32_t AV1ProfileProfessional10 = 0x20;
+inline constexpr int32_t AV1ProfileProfessional12 = 0x40;
 inline constexpr int32_t AV1ProfileMain10HDR10 = 0x1000;
 inline constexpr int32_t AV1ProfileMain10HDR10Plus = 0x2000;
 
@@ -367,6 +372,11 @@ inline static const char *asString_AV1Profile(int32_t i, const char *def = "??")
     switch (i) {
         case AV1ProfileMain8:           return "Main8";
         case AV1ProfileMain10:          return "Main10";
+        case AV1ProfileHigh8:           return "High8";
+        case AV1ProfileHigh10:          return "High10";
+        case AV1ProfileProfessional8:   return "Professional8";
+        case AV1ProfileProfessional10:  return "Professional10";
+        case AV1ProfileProfessional12:  return "Professional12";
         case AV1ProfileMain10HDR10:     return "Main10HDR10";
         case AV1ProfileMain10HDR10Plus: return "Main10HDRPlus";
         default:                        return def;
@@ -433,6 +443,7 @@ inline constexpr int32_t HEVCProfileMain10      = 0x02;
 inline constexpr int32_t HEVCProfileMainStill   = 0x04;
 inline constexpr int32_t HEVCProfileMain400     = 0x08;
 inline constexpr int32_t HEVCProfileMain444     = 0x10;
+inline constexpr int32_t HEVCProfileMain10Still = 0x20;
 inline constexpr int32_t HEVCProfileMain10HDR10 = 0x1000;
 inline constexpr int32_t HEVCProfileMain10HDR10Plus = 0x2000;
 
@@ -443,6 +454,9 @@ inline static const char *asString_HEVCProfile(int32_t i, const char *def = "??"
         case HEVCProfileMainStill:          return "MainStill";
         case HEVCProfileMain400:            return "Main400";
         case HEVCProfileMain444:            return "Main444";
+// QTI_BEGIN: 2025-03-13: Video: frameworks/av: introduce HEVCMain10Still profile
+        case HEVCProfileMain10Still:        return "Main10Still";
+// QTI_END: 2025-03-13: Video: frameworks/av: introduce HEVCMain10Still profile
         case HEVCProfileMain10HDR10:        return "Main10HDR10";
         case HEVCProfileMain10HDR10Plus:    return "Main10HDR10Plus";
         default:                            return def;
@@ -1065,6 +1079,7 @@ inline constexpr char FEATURE_Roi[]                    = "region-of-interest";
 inline constexpr char FEATURE_SecurePlayback[]         = "secure-playback";
 inline constexpr char FEATURE_SpecialCodec[]           = "special-codec";
 inline constexpr char FEATURE_TunneledPlayback[]       = "tunneled-playback";
+inline constexpr char FEATURE_HeifRowModeDecode[]      = "heic-row-by-row-decode";
 
 // from MediaFormat.java
 inline constexpr char MIMETYPE_VIDEO_VP8[] = "video/x-vnd.on2.vp8";
@@ -1080,6 +1095,9 @@ inline constexpr char MIMETYPE_VIDEO_RAW[] = "video/raw";
 inline constexpr char MIMETYPE_VIDEO_DOLBY_VISION[] = "video/dolby-vision";
 inline constexpr char MIMETYPE_VIDEO_SCRAMBLED[] = "video/scrambled";
 inline constexpr char MIMETYPE_VIDEO_VVC[] = "video/vvc";
+// QTI_BEGIN: 2024-09-12: Video: av: Map HEVC profiles for MVHEVC mimeType
+inline constexpr char MIMETYPE_VIDEO_MVHEVC[] = "video/x-mvhevc";
+// QTI_END: 2024-09-12: Video: av: Map HEVC profiles for MVHEVC mimeType
 
 inline constexpr char MIMETYPE_AUDIO_AMR_NB[] = "audio/3gpp";
 inline constexpr char MIMETYPE_AUDIO_AMR_WB[] = "audio/amr-wb";
