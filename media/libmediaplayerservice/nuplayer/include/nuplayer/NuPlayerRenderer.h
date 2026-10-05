@@ -66,21 +66,28 @@ struct NuPlayer::Renderer : public AHandler {
     void signalDisableOffloadAudio();
     void signalEnableOffloadAudio();
 
-    void pause();
+    void pause(bool forPreroll = false);
     void resume();
 
     void setVideoFrameRate(float fps);
+// QTI_BEGIN: 2022-03-26: Video: nuplayer: proper handling of audio start latency for A/V sync
+    void setIsSeekonPause();
+// QTI_END: 2022-03-26: Video: nuplayer: proper handling of audio start latency for A/V sync
 
     status_t getCurrentPosition(int64_t *mediaUs);
     int64_t getVideoLateByUs();
+
+    bool isVideoPrerollInprogress() const;
 
     status_t openAudioSink(
             const sp<AMessage> &format,
             bool offloadOnly,
             bool hasVideo,
             uint32_t flags,
+// QTI_BEGIN: 2017-04-04: Audio: NuPlayer : send the correct streaming info while opening audio sink
             bool *isOffloaded,
             bool isStreaming);
+// QTI_END: 2017-04-04: Audio: NuPlayer : send the correct streaming info while opening audio sink
     void closeAudioSink();
 
     void dump(AString& logString);
@@ -91,7 +98,9 @@ struct NuPlayer::Renderer : public AHandler {
             bool offloadOnly,
             bool hasVideo,
             uint32_t flags,
+// QTI_BEGIN: 2017-04-04: Audio: NuPlayer : send the correct streaming info while opening audio sink
             bool isStreaming,
+// QTI_END: 2017-04-04: Audio: NuPlayer : send the correct streaming info while opening audio sink
             const sp<AMessage> &notify);
 
     enum {
@@ -102,7 +111,12 @@ struct NuPlayer::Renderer : public AHandler {
         kWhatMediaRenderingStart      = 'mdrd',
         kWhatAudioTearDown            = 'adTD',
         kWhatAudioOffloadPauseTimeout = 'aOPT',
+// QTI_BEGIN: 2019-07-01: Video: NuPlayer: Start renderer after video preroll is completed
+        kWhatVideoPrerollComplete     = 'vdpC',
+// QTI_END: 2019-07-01: Video: NuPlayer: Start renderer after video preroll is completed
         kWhatReleaseWakeLock          = 'adRL',
+        kWhatVsyncEvent          = 'vsyE',
+        kWhatSetVsyncMode        = 'sVsM',
     };
 
     enum AudioTearDownReason {
@@ -110,6 +124,7 @@ struct NuPlayer::Renderer : public AHandler {
         kDueToTimeout,
         kForceNonOffload,  // Restart only with non-offload.
     };
+    void setVsyncMode(bool vsyncEnabled);
 
 protected:
     virtual ~Renderer();
@@ -177,6 +192,9 @@ protected:
     AVSyncSettings mSyncSettings;
     float mVideoFpsHint;
 
+// QTI_BEGIN: 2024-11-28: Audio: libmediaplayerservice: NuPlayer: playback: fix anchor time
+    int64_t mLastAudioAnchorNowUs;
+// QTI_END: 2024-11-28: Audio: libmediaplayerservice: NuPlayer: playback: fix anchor time
     int64_t mAudioFirstAnchorTimeMediaUs;
     // previous audio anchor timestamp, in media time base.
     int64_t mAudioAnchorTimeMediaUs;
@@ -197,6 +215,7 @@ protected:
     bool mPaused;
     int64_t mPauseDrainAudioAllowedUs; // time when we can drain/deliver audio in pause mode.
 
+    bool mVideoPrerollInprogress;
     bool mVideoSampleReceived;
     bool mVideoRenderingStarted;
     int32_t mVideoRenderingStartGeneration;
@@ -284,6 +303,10 @@ protected:
     void onDrainVideoQueue();
     void postDrainVideoQueue();
 
+// QTI_BEGIN: 2024-11-28: Audio: libmediaplayerservice: NuPlayer: playback: fix anchor time
+    void forceAudioUpdateAnchorTime();
+
+// QTI_END: 2024-11-28: Audio: libmediaplayerservice: NuPlayer: playback: fix anchor time
     void prepareForMediaRenderingStart_l();
     void notifyIfMediaRenderingStarted_l();
 
@@ -298,7 +321,7 @@ protected:
     status_t onConfigSync(const AVSyncSettings &sync, float videoFpsHint);
     status_t onGetSyncSettings(AVSyncSettings *sync /* nonnull */, float *videoFps /* nonnull */);
 
-    void onPause();
+    void onPause(bool forPreroll = false);
     void onResume();
     void onSetVideoFrameRate(float fps);
     int32_t getQueueGeneration(bool audio);
@@ -311,8 +334,10 @@ protected:
             const sp<AMessage> &format,
             bool offloadOnly,
             bool hasVideo,
+// QTI_BEGIN: 2017-04-04: Audio: NuPlayer : send the correct streaming info while opening audio sink
             uint32_t flags,
             bool isStreaming);
+// QTI_END: 2017-04-04: Audio: NuPlayer : send the correct streaming info while opening audio sink
     void onCloseAudioSink();
     void onChangeAudioFormat(const sp<AMessage> &meta, const sp<AMessage> &notify);
 
@@ -336,9 +361,29 @@ protected:
     int64_t getDurationUsIfPlayedAtSampleRate(uint32_t numFrames);
 
     DISALLOW_EVIL_CONSTRUCTORS(Renderer);
+// QTI_BEGIN: 2018-09-18: Video: NuPlayerRenderer: video should clear and update anchor at the same time
 
 private:
     bool mNeedVideoClearAnchor;
+// QTI_END: 2018-09-18: Video: NuPlayerRenderer: video should clear and update anchor at the same time
+// QTI_BEGIN: 2022-03-26: Video: nuplayer: proper handling of audio start latency for A/V sync
+    bool mIsSeekonPause;
+// QTI_END: 2022-03-26: Video: nuplayer: proper handling of audio start latency for A/V sync
+// QTI_BEGIN: 2020-11-23: Video: Nuplayer: Use video render rate from video decoder
+    float mVideoRenderFps;
+// QTI_END: 2020-11-23: Video: Nuplayer: Use video render rate from video decoder
+
+    // VSync-driven video drain system
+    bool mVsyncVideoModeEnabled;
+
+    // Vsync timing information
+    int64_t mLastVsyncExpectedPresentTimeNs;
+    int64_t mLastVsyncPeriodNs;
+    bool mHasVsyncTiming;
+
+    // VSync event handler
+    void onVsyncEvent(const sp<AMessage> &msg);
+
 };
 
 } // namespace android
