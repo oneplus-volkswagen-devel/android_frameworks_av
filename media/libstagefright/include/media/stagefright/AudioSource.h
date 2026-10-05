@@ -133,7 +133,7 @@ protected:
     int64_t mNumClientOwnedBuffers;
     bool mNoMoreFramesToRead;
 // QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
-    size_t mMaxBufferSize;
+    size_t mMaxBufferSize = 2048;
 // QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 
     List<MediaBuffer * > mBuffersReceived;

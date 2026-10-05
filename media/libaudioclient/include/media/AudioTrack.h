@@ -814,6 +814,9 @@ public:
      */
             static const char * convertTransferToText(transfer_type transferType);
 
+// QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
+public:
+// QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
     /* Returns a handle on the audio output used by this AudioTrack.
      *
      * Parameters:
@@ -1276,6 +1279,10 @@ public:
             /* Sets the Audio Description Mix level in dB. */
             status_t setAudioDescriptionMixLevel_l(float leveldB);
 
+// QTI_BEGIN: 2022-10-06: Audio: av: Added dummy track support for Bluetooth BLE
+            void     createDummyAudioSessionForBluetooth();
+// QTI_END: 2022-10-06: Audio: av: Added dummy track support for Bluetooth BLE
+
     // Next 4 fields may be changed if IAudioTrack is re-created, but always != 0
     sp<media::IAudioTrack>  mAudioTrack;
     sp<IMemory>             mCblkMemory;
@@ -1506,6 +1513,11 @@ public:
     sp<media::VolumeHandler>       mVolumeHandler;
 
     wp<AudioSystem::AudioDeviceCallback> mDeviceCallback;
+
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+    int64_t                mPauseTimeRealUs;
+
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
 
     uint32_t mUnderrunFramesReported GUARDED_BY(mLock){0};
 

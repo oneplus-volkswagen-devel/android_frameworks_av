@@ -395,6 +395,10 @@ static void dumpCodecDetails(int fd, const sp<IMediaCodecList> &codecList, bool 
                             ? asString_AV1Profile(pl.mProfile) :
                         mediaType.equalsIgnoreCase(MIMETYPE_VIDEO_DOLBY_VISION)
                             ? asString_DolbyVisionProfile(pl.mProfile) :
+                        mediaType.equalsIgnoreCase(MIMETYPE_VIDEO_MVHEVC)
+                            ? asString_HEVCProfile(pl.mProfile) :
+                        mediaType.equalsIgnoreCase(MIMETYPE_VIDEO_APV)
+                            ? asString_APVProfile(pl.mProfile)  :
                         mediaType.equalsIgnoreCase(MIMETYPE_AUDIO_AC4)
                             ? asString_AC4Profile(pl.mProfile) : "??";
                     const char *niceLevel =
@@ -414,6 +418,10 @@ static void dumpCodecDetails(int fd, const sp<IMediaCodecList> &codecList, bool 
                             ? asString_VP9Level(pl.mLevel) :
                         mediaType.equalsIgnoreCase(MIMETYPE_VIDEO_AV1)
                             ? asString_AV1Level(pl.mLevel) :
+                        mediaType.equalsIgnoreCase(MIMETYPE_VIDEO_MVHEVC)
+                            ? asString_HEVCTierLevel(pl.mLevel) :
+                        mediaType.equalsIgnoreCase(MIMETYPE_VIDEO_APV)
+                            ? asString_APVBandLevel(pl.mLevel) :
                         mediaType.equalsIgnoreCase(MIMETYPE_VIDEO_DOLBY_VISION)
                             ? asString_DolbyVisionLevel(pl.mLevel) :
                         mediaType.equalsIgnoreCase(MIMETYPE_AUDIO_AC4)
@@ -1995,7 +2003,13 @@ int64_t MediaPlayerService::AudioOutput::getPlayedOutDurationUs(int64_t nowUs) c
         //        numFramesPlayed, (long long)numFramesPlayedAtUs);
     } else {                         // case 3: transitory at new track or audio fast tracks.
         res = mTrack->getPosition(&numFramesPlayed);
-        CHECK_EQ(res, (status_t)OK);
+// QTI_BEGIN: 2018-03-22: Audio: add support for error handling of dsp SSR
+        if (res != OK) {
+            // return with invalid duration to indicate playback position should
+            // be queried from MediaClock using system clock
+            return -1;
+        }
+// QTI_END: 2018-03-22: Audio: add support for error handling of dsp SSR
         numFramesPlayedAtUs = nowUs;
         numFramesPlayedAtUs += 1000LL * mTrack->latency() / 2; /* XXX */
         //ALOGD("getPosition: %u %lld", numFramesPlayed, (long long)numFramesPlayedAtUs);
@@ -2543,6 +2557,11 @@ void MediaPlayerService::AudioOutput::close()
     ALOGV("close");
     sp<AudioTrack> track;
     {
+// QTI_BEGIN: 2022-02-17: Audio: libmediaplayerservice: Explicitly force callbacks to stop running
+        if (mTrack != 0) {
+            mTrack->stopAndJoinCallbacks();
+        }
+// QTI_END: 2022-02-17: Audio: libmediaplayerservice: Explicitly force callbacks to stop running
         Mutex::Autolock lock(mLock);
         track = mTrack;
     }

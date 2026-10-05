@@ -1169,6 +1169,9 @@ protected:
             const std::vector<uint8_t>& metadataBs) final;
 
     // ThreadBase virtuals
+// QTI_BEGIN: 2019-04-10: Audio: audioflinger: Throttle output if no active tracks
+    virtual     void        onIdleMixer();
+// QTI_END: 2019-04-10: Audio: audioflinger: Throttle output if no active tracks
     void preExit() final EXCLUDES_ThreadBase_Mutex;
 
     virtual     bool        keepWakeLock() const { return true; }
@@ -1278,11 +1281,11 @@ public:
                 }
 
     virtual status_t getTimestamp_l(AudioTimestamp& timestamp)
-            REQUIRES(mutex(), ThreadBase_ThreadLoop);
-
+        REQUIRES(mutex(), ThreadBase_ThreadLoop);
+        
     void addPatchTrack(const sp<IAfPatchTrack>& track) final EXCLUDES_ThreadBase_Mutex;
     void deletePatchTrack(const sp<IAfPatchTrack>& track) final EXCLUDES_ThreadBase_Mutex;
-
+        
     // NO_THREAD_SAFETY_ANALYSIS - fix this to use atomics.
     void toAudioPortConfig(struct audio_port_config* config) final;
 
@@ -1643,7 +1646,9 @@ protected:
      uint32_t mFastTrackAvailMask;  // bit i set if fast track [i] is available
                 bool        mHwSupportsPause;
                 bool        mHwPaused;
-
+// QTI_BEGIN: 2018-03-23: Audio: audioflinger: Throttle output if no active tracks
+                bool        mHwSupportsSuspend;
+// QTI_END: 2018-03-23: Audio: audioflinger: Throttle output if no active tracks
                 // volumes last sent to audio HAL with stream->setVolume()
                 float mLeftVolFloat;
                 float mRightVolFloat;
@@ -1736,19 +1741,22 @@ protected:
     void threadLoop_standby() override REQUIRES(ThreadBase_ThreadLoop);
     void threadLoop_mix() override REQUIRES(ThreadBase_ThreadLoop);
     void threadLoop_sleepTime() override REQUIRES(ThreadBase_ThreadLoop);
+    void onIdleMixer() override REQUIRES(ThreadBase_ThreadLoop);
+
     uint32_t correctLatency_l(uint32_t latency) const final REQUIRES(mutex());
 
     status_t createAudioPatch_l(
             const struct audio_patch* patch, audio_patch_handle_t* handle)
             final REQUIRES(mutex(), ThreadBase_ThreadLoop);
-    status_t releaseAudioPatch_l(const audio_patch_handle_t handle)
-            final REQUIRES(mutex(), ThreadBase_ThreadLoop);
+    status_t releaseAudioPatch_l(const audio_patch_handle_t handle) final REQUIRES(mutex(), ThreadBase_ThreadLoop);
 
                 AudioMixer* mAudioMixer;    // normal mixer
 
             // Support low latency mode by default as unless explicitly indicated by the audio HAL
             // we assume the audio path is compatible with the head tracking latency requirements
-            std::vector<audio_latency_mode_t> mSupportedLatencyModes = {AUDIO_LATENCY_MODE_LOW};
+// QTI_BEGIN: 2023-06-14: Audio: update default supported latency modes
+            std::vector<audio_latency_mode_t> mSupportedLatencyModes = {AUDIO_LATENCY_MODE_FREE,AUDIO_LATENCY_MODE_LOW};
+// QTI_END: 2023-06-14: Audio: update default supported latency modes
             // default to invalid value to force first update to the audio HAL
             audio_latency_mode_t mSetLatencyMode =
                     (audio_latency_mode_t)AUDIO_LATENCY_MODE_INVALID;
@@ -1772,6 +1780,7 @@ private:
                 // accessible only within the threadLoop(), no locks required
                 //          mFastMixer->sq()    // for mutating and pushing state
     int32_t mFastMixerFutex GUARDED_BY(ThreadBase_ThreadLoop);  // for cold idle
+    int64_t mIdleTimeOffsetUs GUARDED_BY(ThreadBase_ThreadLoop);
 
                 std::atomic_bool mMasterMono;
 public:
@@ -2537,8 +2546,8 @@ protected:
     const std::shared_ptr<audio_utils::TimerQueue> mTimerQueue;  // (non-null) locked internally
     audio_utils::TimerQueue::handle_t mWakeUpHandle GUARDED_BY(mutex())
             {audio_utils::TimerQueue::INVALID_HANDLE};
-    atomic_int mTimerQueueCallbacks = 0;
-    atomic_int64_t mTimerQueueCallbackNs = 0;
+    std::atomic_int mTimerQueueCallbacks = 0;
+    std::atomic_int64_t mTimerQueueCallbackNs = 0;
 };
 
 class MmapCaptureThread : public MmapThread

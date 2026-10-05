@@ -32,6 +32,7 @@ filegroup {
         "RemoteDisplay.cpp",
         "StagefrightRecorder.cpp",
         "TestPlayerStub.cpp",
+        "mpctl/PerfBoost.cpp",
     ],
 }
 

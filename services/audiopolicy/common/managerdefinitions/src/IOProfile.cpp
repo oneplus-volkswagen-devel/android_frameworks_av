@@ -88,7 +88,7 @@ IOProfile::CompatibilityScore IOProfile::getCompatibilityScore(
                 result = PARTIAL_MATCH_WITH_CONFIG;
             }
         } else if (checkCompatibleAudioProfile(
-                myUpdatedSamplingRate, myUpdatedChannelMask, myUpdatedFormat) == NO_ERROR) {
+                myUpdatedSamplingRate, myUpdatedChannelMask, myUpdatedFormat, false /*checkExactFormat*/, false /*checkExactChannelMask*/) == NO_ERROR) {
             if (flagsCompatibleScore == EXACT_MATCH) {
                 result = PARTIAL_MATCH_WITH_FLAG;
             } else {

@@ -87,6 +87,9 @@ std::array<char const*, 5> const& getXmlPaths() {
 Mutex MediaProfiles::sLock;
 bool MediaProfiles::sIsInitialized = false;
 MediaProfiles *MediaProfiles::sInstance = NULL;
+// QTI_BEGIN: 2023-11-22: Core: libmedia: Add support for media profiles override
+MediaProfiles::MediaProfiles_override *MediaProfiles::mMediaProfiles_override = NULL;
+// QTI_END: 2023-11-22: Core: libmedia: Add support for media profiles override
 
 const MediaProfiles::NameToTagMap MediaProfiles::sVideoEncoderNameMap[] = {
     {"h263", VIDEO_ENCODER_H263},
@@ -171,6 +174,9 @@ const MediaProfiles::NameToTagMap MediaProfiles::sCamcorderQualityNameMap[] = {
     {"timelapse4kdci", CAMCORDER_QUALITY_TIME_LAPSE_4KDCI},
     {"timelapseqhd", CAMCORDER_QUALITY_TIME_LAPSE_QHD},
     {"timelapse2k", CAMCORDER_QUALITY_TIME_LAPSE_2K},
+// QTI_BEGIN: 2021-05-05: Video: media: Add timelapse 8k UHD Camcorder profile to quality map
+    {"timelapse8kuhd", CAMCORDER_QUALITY_TIME_LAPSE_8KUHD},
+// QTI_END: 2021-05-05: Video: media: Add timelapse 8k UHD Camcorder profile to quality map
 
     {"highspeedlow",  CAMCORDER_QUALITY_HIGH_SPEED_LOW},
     {"highspeedhigh", CAMCORDER_QUALITY_HIGH_SPEED_HIGH},
@@ -755,6 +761,151 @@ void MediaProfiles::addStartTimeOffset(int cameraId, const char** atts, size_t n
     mStartTimeOffsets.replaceValueFor(cameraId, offsetTimeMs);
 }
 
+// QTI_BEGIN: 2023-11-22: Core: libmedia: Add support for media profiles override
+/*static*/ void
+MediaProfiles::startOverrideXmlElementHandler(void *userData, const char *name, const char **atts)
+{
+    size_t natts = 0;
+    while (atts[natts]) {
+        ++natts;
+    }
+    MediaProfiles_override *profiles = (MediaProfiles_override *)userData;
+
+    if (strcmp("CamcorderProfiles", name) == 0) {
+        CHECK(natts >= 2 &&
+          !strcmp("cameraId", atts[0]));
+        int cameraId = getCameraId(atts, natts);
+        profiles->mCameraIds_override.push_back(cameraId);
+    } else if (strcmp("VideoEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mVideoEncoders_override.push_back(atts[1]);
+    } else if (strcmp("AudioEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mAudioEncoders_override.push_back(atts[1]);
+    } else if (strcmp("VideoDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mVideoDecoders_override.push_back(atts[1]);
+    } else if (strcmp("AudioDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mAudioDecoders_override.push_back(atts[1]);
+    } else if (strcmp("EncoderOutputFileFormat", name) == 0) {
+         CHECK(natts >= 2 &&
+          !strcmp("name", atts[0]));
+        profiles->mEncoderOutputFileFormats_override.push_back(atts[1]);
+    }
+
+}
+
+/*static*/ void
+MediaProfiles::startElementHandler_override(void *userData, const char *name, const char **atts)
+{
+    // determine number of attributes
+    size_t natts = 0;
+    while (atts[natts]) {
+        ++natts;
+    }
+
+    MediaProfiles *profiles = (MediaProfiles *)userData;
+    MediaProfiles_override *profiles_override = profiles->mMediaProfiles_override;
+    if (strcmp("Video", name) == 0) {
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            createVideoCodec(atts, natts, profiles);
+        }
+    } else if (strcmp("Audio", name) == 0) {
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            createAudioCodec(atts, natts, profiles);
+        }
+    } else if (strcmp("VideoEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mVideoEncoders_override.begin(),
+                profiles_override->mVideoEncoders_override.end(), atts[1]) ==
+                profiles_override->mVideoEncoders_override.end()) {
+             MediaProfiles::VideoEncoderCap* cap = createVideoEncoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mVideoEncoders.add(cap);
+            }
+        }
+    } else if (strcmp("AudioEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mAudioEncoders_override.begin(),
+                profiles_override->mAudioEncoders_override.end(), atts[1]) ==
+                profiles_override->mAudioEncoders_override.end()) {
+            MediaProfiles::AudioEncoderCap* cap = createAudioEncoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mAudioEncoders.add(cap);
+            }
+        }
+    } else if (strcmp("VideoDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mVideoDecoders_override.begin(),
+                profiles_override->mVideoDecoders_override.end(), atts[1]) ==
+                profiles_override->mVideoDecoders_override.end()){
+            MediaProfiles::VideoDecoderCap* cap = createVideoDecoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mVideoDecoders.add(cap);
+            }
+        }
+    } else if (strcmp("AudioDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mAudioDecoders_override.begin(),
+                profiles_override->mAudioDecoders_override.end(), atts[1]) ==
+                profiles_override->mAudioDecoders_override.end()) {
+             MediaProfiles::AudioDecoderCap* cap = createAudioDecoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mAudioDecoders.add(cap);
+            }
+        }
+    } else if (strcmp("EncoderOutputFileFormat", name) == 0) {
+        CHECK(natts >= 2 &&
+          !strcmp("name", atts[0]));
+        if (std::find(profiles_override->mEncoderOutputFileFormats_override.begin(),
+                profiles_override->mEncoderOutputFileFormats_override.end(), atts[1])
+                == profiles_override->mEncoderOutputFileFormats_override.end()) {
+            profiles->mEncoderOutputFileFormats.add(createEncoderOutputFileFormat(atts, natts));
+        }
+    } else if (strcmp("CamcorderProfiles", name) == 0) {
+        profiles->mCurrentCameraId = getCameraId(atts, natts);
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            profiles->addStartTimeOffset(profiles->mCurrentCameraId, atts, natts);
+        }
+    } else if (strcmp("EncoderProfile", name) == 0) {
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            MediaProfiles::CamcorderProfile* profile = createCamcorderProfile(
+            profiles->mCurrentCameraId, atts, natts, profiles->mCameraIds);
+            if (profile != nullptr) {
+                profiles->mCamcorderProfiles.add(profile);
+            }
+        }
+    } else if (strcmp("ImageEncoding", name) == 0) {
+        profiles->addImageEncodingQualityLevel(profiles->mCurrentCameraId, atts, natts);
+    }
+}
+
+// QTI_END: 2023-11-22: Core: libmedia: Add support for media profiles override
 /*static*/ void
 MediaProfiles::startElementHandler(void *userData, const char *name, const char **atts)
 {
@@ -989,6 +1140,9 @@ void MediaProfiles::checkAndAddRequiredProfilesIfNecessary() {
 /*static*/ MediaProfiles*
 MediaProfiles::getInstance()
 {
+// QTI_BEGIN: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+    char platform[PROPERTY_VALUE_MAX] = {0};
+// QTI_END: 2018-08-13: Video: media: Add changes to pick target specific media xml's
     ALOGV("getInstance");
     Mutex::Autolock lock(sLock);
     if (!sIsInitialized) {
@@ -1009,6 +1163,107 @@ MediaProfiles::getInstance()
                 sInstance = createInstanceFromXmlFile(xmlFile);
             }
         } else {
+// QTI_BEGIN: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+                if (!strncmp(value, "/vendor/etc", strlen("/vendor/etc"))) {
+                    property_get("ro.board.platform", platform, NULL);
+                    if (!strcmp(platform, "msm8953")){
+// QTI_END: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+// QTI_BEGIN: 2019-11-04: Video: MediaProfiles: rename the device name with target
+                        if (property_get("vendor.media.target.version", value, "0") &&
+// QTI_END: 2019-11-04: Video: MediaProfiles: rename the device name with target
+// QTI_BEGIN: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+                            (atoi(value) == 1)){
+                            strlcpy(value, "/vendor/etc/media_profiles_8953_v1.xml",
+                                    PROPERTY_VALUE_MAX);
+                        } else {
+                            strlcpy(value, "/vendor/etc/media_profiles_vendor.xml",
+                                    PROPERTY_VALUE_MAX);
+                        }
+// QTI_END: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+// QTI_BEGIN: 2018-09-25: Video: media: Changes to pick target specific media xml
+                    } else if (!strcmp(platform, "sdm660")) {
+// QTI_END: 2018-09-25: Video: media: Changes to pick target specific media xml
+// QTI_BEGIN: 2019-11-04: Video: MediaProfiles: rename the device name with target
+                        property_get("vendor.media.target.version", value, "0");
+// QTI_END: 2019-11-04: Video: MediaProfiles: rename the device name with target
+// QTI_BEGIN: 2018-09-25: Video: media: Changes to pick target specific media xml
+                        if (atoi(value) == 1) {
+                            strlcpy(value, "/vendor/etc/media_profiles_sdm660_v1.xml",
+                                    PROPERTY_VALUE_MAX);
+                        } else {
+                            strlcpy(value, "/vendor/etc/media_profiles_vendor.xml",
+                                    PROPERTY_VALUE_MAX);
+                        }
+// QTI_END: 2018-09-25: Video: media: Changes to pick target specific media xml
+// QTI_BEGIN: 2020-04-02: Video: media: add support to pick target specific xml
+                    } else if (!strcmp(platform, "bengal")) {
+// QTI_END: 2020-04-02: Video: media: add support to pick target specific xml
+// QTI_BEGIN: 2020-05-26: Video: media: extend added support to pick target specific xml
+                        property_get("vendor.sys.media.target.version", value, "0");
+// QTI_END: 2020-05-26: Video: media: extend added support to pick target specific xml
+// QTI_BEGIN: 2021-04-23: Video: media: add support to pick target specific xml
+                        if (atoi(value) == 3) {
+                            strlcpy(value, "/vendor/etc/media_profiles_khaje.xml",
+                                    PROPERTY_VALUE_MAX);
+                        } else if (atoi(value) == 2) {
+// QTI_END: 2021-04-23: Video: media: add support to pick target specific xml
+// QTI_BEGIN: 2020-04-02: Video: media: add support to pick target specific xml
+                            strlcpy(value, "/vendor/etc/media_profiles_scuba.xml",
+                                    PROPERTY_VALUE_MAX);
+                        } else {
+                            strlcpy(value, "/vendor/etc/media_profiles_vendor.xml",
+                                    PROPERTY_VALUE_MAX);
+                        }
+// QTI_END: 2020-04-02: Video: media: add support to pick target specific xml
+// QTI_BEGIN: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+                    }
+// QTI_END: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+// QTI_BEGIN: 2020-08-04: Video: media: add support to pick profiles xml based on target variant
+                    char variant[PROPERTY_VALUE_MAX];
+                    if (property_get("ro.media.xml_variant.codecs", variant, NULL) > 0) {
+                        std::string xmlPath = std::string("/vendor/etc/media_profiles") +
+                                              std::string(variant) + std::string(".xml");
+                        strlcpy(value, xmlPath.c_str(), PROPERTY_VALUE_MAX);
+                        ALOGI("Profiles xml path: %s", value);
+// QTI_END: 2020-08-04: Video: media: add support to pick profiles xml based on target variant
+// QTI_BEGIN: 2023-11-22: Core: libmedia: Add support for media profiles override
+                        //Checking if QSPA is enabled
+                        char qspaEnabled[PROPERTY_VALUE_MAX];
+                        property_get("ro.boot.vendor.qspa", qspaEnabled, NULL);
+                        if (!strcmp(qspaEnabled, "true")) {
+                            char val[PROPERTY_VALUE_MAX];
+                            if (property_get("ro.boot.vendor.qspa.video", val, NULL) > 0) {
+                                if(!strcmp(val, "disabled")) {
+                                    std::string xmlPath_override =
+                                            std::string("/vendor/etc/media_profiles") +
+                                            std::string(variant) + std::string("_override") +
+                                            std::string(".xml");
+                                    //Check if override xml exists
+                                    struct stat fileStat;
+                                    if (stat(xmlPath_override.c_str(), &fileStat) == 0 &&
+                                            S_ISREG(fileStat.st_mode)) {
+                                        ALOGI("Qspa Profiles override xml path: %s",
+                                                xmlPath_override.c_str());
+                                        mMediaProfiles_override =
+                                                parseOverrideXmlFile(xmlPath_override.c_str());
+                                        sInstance = createInstanceFromXmlFile_override(value,
+                                                mMediaProfiles_override);
+
+                                        CHECK(sInstance != NULL);
+                                        sInstance->checkAndAddRequiredProfilesIfNecessary();
+                                        sIsInitialized = true;
+                                        return sInstance;
+                                    }
+                                }
+                            }
+                        }
+// QTI_END: 2023-11-22: Core: libmedia: Add support for media profiles override
+// QTI_BEGIN: 2020-08-04: Video: media: add support to pick profiles xml based on target variant
+                    }
+// QTI_END: 2020-08-04: Video: media: add support to pick profiles xml based on target variant
+// QTI_BEGIN: 2018-08-13: Video: media: Add changes to pick target specific media xml's
+                }
+// QTI_END: 2018-08-13: Video: media: Add changes to pick target specific media xml's
             sInstance = createInstanceFromXmlFile(value);
         }
         CHECK(sInstance != NULL);
@@ -1262,6 +1517,107 @@ bool MediaProfiles::checkXmlFile(const char* xmlFile) {
     // TODO: Add validation
 }
 
+// QTI_BEGIN: 2023-11-22: Core: libmedia: Add support for media profiles override
+//Parsing the Qspa override xml file
+/*static*/ MediaProfiles::MediaProfiles_override*
+MediaProfiles::parseOverrideXmlFile(const char *xml)
+{
+    MediaProfiles::MediaProfiles_override *profiles =
+        new MediaProfiles::MediaProfiles_override();
+    FILE *fp = NULL;
+    CHECK((fp = fopen(xml, "r")));
+
+    XML_Parser parser = ::XML_ParserCreate(NULL);
+    CHECK(parser != NULL);
+
+    ::XML_SetUserData(parser, profiles);
+    ::XML_SetElementHandler(parser, startOverrideXmlElementHandler, NULL);
+
+    const int BUFF_SIZE = 512;
+    for (;;) {
+        void *buff = ::XML_GetBuffer(parser, BUFF_SIZE);
+        if (buff == NULL) {
+            ALOGE("failed to in call to XML_GetBuffer()");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        int bytes_read = ::fread(buff, 1, BUFF_SIZE, fp);
+        if (bytes_read < 0) {
+            ALOGE("failed in call to read");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        CHECK(::XML_ParseBuffer(parser, bytes_read, bytes_read == 0));
+
+        if (bytes_read == 0) break;  // done parsing the xml file
+    }
+
+    exit:
+        ::XML_ParserFree(parser);
+        ::fclose(fp);
+    return profiles;
+}
+
+//Creating instance from profiles xml file, given Qspa override xml file
+/*static*/ MediaProfiles*
+MediaProfiles::createInstanceFromXmlFile_override(const char *xml, MediaProfiles_override *profiles_overide)
+{
+    FILE *fp = NULL;
+    CHECK((fp = fopen(xml, "r")));
+
+    XML_Parser parser = ::XML_ParserCreate(NULL);
+    CHECK(parser != NULL);
+
+    MediaProfiles *profiles = new MediaProfiles();
+    profiles->mMediaProfiles_override = profiles_overide;
+    ::XML_SetUserData(parser, profiles);
+    ::XML_SetElementHandler(parser, startElementHandler_override, NULL);
+
+     /*
+      FIXME:
+      expat is not compiled with -DXML_DTD. We don't have DTD parsing support.
+
+      if (!::XML_SetParamEntityParsing(parser, XML_PARAM_ENTITY_PARSING_ALWAYS)) {
+          ALOGE("failed to enable DTD support in the xml file");
+          return UNKNOWN_ERROR;
+      }
+
+    */
+
+    const int BUFF_SIZE = 512;
+    for (;;) {
+        void *buff = ::XML_GetBuffer(parser, BUFF_SIZE);
+        if (buff == NULL) {
+            ALOGE("failed to in call to XML_GetBuffer()");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        int bytes_read = ::fread(buff, 1, BUFF_SIZE, fp);
+        if (bytes_read < 0) {
+            ALOGE("failed in call to read");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        CHECK(::XML_ParseBuffer(parser, bytes_read, bytes_read == 0));
+
+        if (bytes_read == 0) break;  // done parsing the xml file
+    }
+
+    exit:
+        ::XML_ParserFree(parser);
+        ::fclose(fp);
+        return profiles;
+}
+
+// QTI_END: 2023-11-22: Core: libmedia: Add support for media profiles override
 /*static*/ MediaProfiles*
 MediaProfiles::createInstanceFromXmlFile(const char *xml)
 {

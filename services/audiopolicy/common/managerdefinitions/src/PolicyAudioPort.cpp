@@ -231,30 +231,68 @@ void PolicyAudioPort::pickAudioProfile(uint32_t &samplingRate,
         bestFormat = AUDIO_FORMAT_INVALID;
     }
 
+    const bool directOutput = asAudioPort()->isDirectOutput();
+    const bool inputChannelMask = asAudioPort()->useInputChannelMask();
+    uint32_t channelCount = directOutput ? UINT_MAX : 0;
+
     const AudioProfileVector& audioProfiles = asAudioPort()->getAudioProfiles();
     for (size_t i = 0; i < audioProfiles.size(); i ++) {
         if (!audioProfiles[i]->isValid()) {
             continue;
         }
         audio_format_t formatToCompare = audioProfiles[i]->getFormat();
-        if ((compareFormats(formatToCompare, format) > 0) &&
-                (compareFormats(formatToCompare, bestFormat) <= 0)) {
-            uint32_t pickedSamplingRate = 0;
-            audio_channel_mask_t pickedChannelMask = AUDIO_CHANNEL_NONE;
-            pickChannelMask(pickedChannelMask, audioProfiles[i]->getChannels());
-            pickSamplingRate(pickedSamplingRate, audioProfiles[i]->getSampleRates());
+        if (formatToCompare == AUDIO_FORMAT_DEFAULT
+                || compareFormats(formatToCompare, bestFormat) > 0) {
+            continue;
+        }
 
-            if (formatToCompare != AUDIO_FORMAT_DEFAULT && pickedChannelMask != AUDIO_CHANNEL_NONE
-                    && pickedSamplingRate != 0) {
-                format = formatToCompare;
-                channelMask = pickedChannelMask;
-                samplingRate = pickedSamplingRate;
-                // TODO: shall we return on the first one or still trying to pick a better Profile?
+        uint32_t pickedSamplingRate = 0;
+        audio_channel_mask_t pickedChannelMask = AUDIO_CHANNEL_NONE;
+        pickChannelMask(pickedChannelMask, audioProfiles[i]->getChannels());
+        pickSamplingRate(pickedSamplingRate, audioProfiles[i]->getSampleRates());
+
+        if (pickedChannelMask == AUDIO_CHANNEL_NONE || pickedSamplingRate == 0) {
+            continue;
+        }
+
+        // Precedence: Format > Channel count > Sampling rate
+        const uint32_t pickedChannelCount =
+                inputChannelMask ? audio_channel_count_from_in_mask(pickedChannelMask)
+                                 : audio_channel_count_from_out_mask(pickedChannelMask);
+        const int formatComparison = compareFormats(formatToCompare, format);
+        bool betterProfile = false;
+        const char* reason = "";
+        if (formatComparison > 0) {
+            betterProfile = true;
+            reason = "format";
+        } else if (formatComparison == 0) {
+            if (directOutput ? pickedChannelCount < channelCount
+                             : pickedChannelCount > channelCount) {
+                betterProfile = true;
+                reason = "channelCount";
+            } else if (pickedChannelCount == channelCount) {
+                if (directOutput ? pickedSamplingRate < samplingRate
+                                 : pickedSamplingRate > samplingRate) {
+                    betterProfile = true;
+                    reason = "samplingRate";
+                }
             }
         }
+
+        if (betterProfile) {
+            ALOGV("%s Port[nm:%s] select profile[%zu] reason=%s rate=%u format=0x%x "
+                  "mask=0x%x ch=%u previous rate=%u format=0x%x mask=0x%x ch=%u",
+                  __func__, asAudioPort()->getName().c_str(), i, reason, pickedSamplingRate,
+                  formatToCompare, pickedChannelMask, pickedChannelCount, samplingRate, format,
+                  channelMask, channelCount == UINT_MAX ? 0 : channelCount);
+            format = formatToCompare;
+            channelMask = pickedChannelMask;
+            samplingRate = pickedSamplingRate;
+            channelCount = pickedChannelCount;
+        }
     }
-    ALOGV("%s Port[nm:%s] profile rate=%d, format=%d, channels=%d", __FUNCTION__,
-            asAudioPort()->getName().c_str(), samplingRate, format, channelMask);
+    ALOGV("%s Port[nm:%s] profile rate=%u, format=0x%x, mask=0x%x", __func__,
+          asAudioPort()->getName().c_str(), samplingRate, format, channelMask);
 }
 
 status_t PolicyAudioPort::checkAudioProfile(

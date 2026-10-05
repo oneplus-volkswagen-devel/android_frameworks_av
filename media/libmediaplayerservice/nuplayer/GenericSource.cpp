@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+// QTI_BEGIN: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
 //#define LOG_NDEBUG 0
+// QTI_END: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
 #define LOG_TAG "GenericSource"
 
 #include "GenericSource.h"
@@ -43,6 +45,9 @@
 #include <media/stagefright/MediaExtractorFactory.h>
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/Utils.h>
+// QTI_BEGIN: 2018-04-23: Audio: Enable ByteStream mode
+#include "mediaplayerservice/AVNuExtensions.h"
+// QTI_END: 2018-04-23: Audio: Enable ByteStream mode
 #include <mpeg2ts/AnotherPacketSource.h>
 
 namespace android {
@@ -316,7 +321,6 @@ status_t NuPlayer::GenericSource::startSources() {
         ALOGE("failed to start audio track!");
         return UNKNOWN_ERROR;
     }
-
     if (mVideoTrack.mSource != NULL && mVideoTrack.mSource->start() != OK) {
         ALOGE("failed to start video track!");
         return UNKNOWN_ERROR;
@@ -1281,6 +1285,16 @@ sp<ABuffer> NuPlayer::GenericSource::mediaBufferToABuffer(
         meta->setBuffer("mpeg-user-data", mpegUserData);
     }
 
+// QTI_BEGIN: 2019-10-20: Video: stagefright: Set HDR10+ sample metadata to codec
+    const void *hdr10PlusInfo;
+    size_t hdr10PlusInfoLength;
+    if (mb->meta_data().findData(
+            kKeyHdr10PlusInfo, &dataType, &hdr10PlusInfo, &hdr10PlusInfoLength)) {
+        sp<ABuffer> hdr10PlusData = ABuffer::CreateAsCopy(hdr10PlusInfo, hdr10PlusInfoLength);
+        meta->setBuffer("hdr10-plus-info", hdr10PlusData);
+    }
+
+// QTI_END: 2019-10-20: Video: stagefright: Set HDR10+ sample metadata to codec
     mb->release();
     mb = NULL;
 

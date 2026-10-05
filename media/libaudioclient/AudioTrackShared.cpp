@@ -343,7 +343,6 @@ status_t ClientProxy::obtainBuffer(Buffer* buffer, const struct timespec *reques
                     mClientInServer ? FUTEX_WAIT_PRIVATE : FUTEX_WAIT, old & ~CBLK_FUTEX_WAKE, ts);
             status_t error = ret == -1 ? errno : 0; // clock_gettime can affect errno
             ALOGD_IF(ret == -1 && error == 0, "%s: futex failed but no error set.", __func__);
-
             // update total elapsed time spent waiting
             if (measure) {
                 struct timespec after;
@@ -362,7 +361,9 @@ status_t ClientProxy::obtainBuffer(Buffer* buffer, const struct timespec *reques
                 before = after;
                 beforeIsValid = true;
             }
+// QTI_BEGIN: 2015-12-18: Audio: libmedia: Preserve futex return status in client obtainBuffer
             switch (error) {
+// QTI_END: 2015-12-18: Audio: libmedia: Preserve futex return status in client obtainBuffer
             case 0:            // normal wakeup by server, or by binderDied()
                 ALOGV("%s: wake success", __func__);
                 break;
@@ -375,7 +376,9 @@ status_t ClientProxy::obtainBuffer(Buffer* buffer, const struct timespec *reques
                 ALOGD("%s: benign status '%s' (recheck)", __func__, strerror(error));
                 break;
             default:
+// QTI_BEGIN: 2015-12-18: Audio: libmedia: Preserve futex return status in client obtainBuffer
                 status = error;
+// QTI_END: 2015-12-18: Audio: libmedia: Preserve futex return status in client obtainBuffer
                 ALOGE("%s: unexpected error %s", __func__, strerror(error));
                 goto end;
             }

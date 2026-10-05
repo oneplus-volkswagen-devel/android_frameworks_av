@@ -32,7 +32,6 @@ cc_library_headers {
 
 cc_defaults {
     name: "libstagefright_foundation_defaults",
-    vendor_available: true,
     host_supported: true,
     double_loadable: true,
 
@@ -49,16 +48,9 @@ cc_defaults {
         "media_ndk_headers",
         "media_plugin_headers",
     ],
-
     export_header_lib_headers: [
         "libstagefright_foundation_headers",
         "media_plugin_headers",
-    ],
-
-    cflags: [
-        "-Wno-multichar",
-        "-Werror",
-        "-Wall",
     ],
 
     shared_libs: [
@@ -133,12 +125,38 @@ cc_defaults {
 
 cc_library {
     name: "libstagefright_foundation",
+    vendor_available: true,
     defaults: ["libstagefright_foundation_defaults"],
     min_sdk_version: "29",
     apex_available: [
         "//apex_available:platform",
         "com.android.media",
         "com.android.media.swcodec",
+    ],
+    target: {
+        vendor: {
+            cflags: ["-D__ANDROID_VNDK__"],
+        },
+    },
+
+    cflags: [
+        "-Wno-multichar",
+        "-Werror",
+        "-Wall",
+    ],
+}
+
+cc_library {
+    name: "libstagefright_foundation_ext",
+    vendor: true,
+    defaults: ["libstagefright_foundation_defaults"],
+    host_supported: false,
+    min_sdk_version: "29",
+    cflags: [
+        "-Wno-multichar",
+        "-Werror",
+        "-Wall",
+        "-D__ANDROID_VNDK_EXT__",
     ],
 }
 
@@ -147,7 +165,6 @@ cc_library_static {
     defaults: ["libstagefright_foundation_defaults"],
     min_sdk_version: "29",
     apex_available: ["com.android.media"],
-
 
     cflags: [
         "-Wno-multichar",

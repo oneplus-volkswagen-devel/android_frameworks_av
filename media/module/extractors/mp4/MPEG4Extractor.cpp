@@ -209,8 +209,10 @@ private:
     status_t parseClearEncryptedSizes(off64_t offset, bool isSampleEncryption,
             uint32_t flags, off64_t size);
     status_t parseSampleEncryption(off64_t offset, off64_t size);
+// QTI_BEGIN: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
     // returns -1 for invalid layer ID
     int32_t parseHEVCLayerId(const uint8_t *data, size_t size);
+// QTI_END: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
     size_t getNALLengthSizeFromAvcCsd(const uint8_t *data, const size_t size) const;
     size_t getNALLengthSizeFromHevcCsd(const uint8_t *data, const size_t size) const;
 
@@ -2727,6 +2729,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             *offset += chunk_size;
             break;
         }
+
         case FOURCC("vpcC"):
         {
             if (mLastTrack == NULL) {
@@ -4362,6 +4365,7 @@ status_t MPEG4Extractor::parseQTMetaVal(
         if (!strcasecmp(mMetaKeyMap[index].c_str(), "com.android.capture.fps")) {
             AMediaFormat_setFloat(mFileMetaData, AMEDIAFORMAT_KEY_CAPTURE_RATE, *(float *)&val);
         }
+// QTI_BEGIN: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
     } else if (dataType == 67 && dataSize >= 4) {
         // BE signed int32
         uint32_t val;
@@ -4369,9 +4373,12 @@ status_t MPEG4Extractor::parseQTMetaVal(
             return ERROR_MALFORMED;
         }
         if (!strcasecmp(mMetaKeyMap[index].c_str(), "com.android.video.temporal_layers_count")) {
+// QTI_END: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
             AMediaFormat_setInt32(mFileMetaData,
                     AMEDIAFORMAT_KEY_TEMPORAL_LAYER_COUNT, val);
+// QTI_BEGIN: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
         }
+// QTI_END: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
     } else {
         // add more keys if needed
         ALOGV("ignoring key: type %d, size %d", dataType, dataSize);
@@ -6689,10 +6696,13 @@ size_t MPEG4Source::parseNALSize(const uint8_t *data) const {
     return 0;
 }
 
+// QTI_BEGIN: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
 int32_t MPEG4Source::parseHEVCLayerId(const uint8_t *data, size_t size) {
+// QTI_END: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
     if (data == nullptr || size < mNALLengthSize + 2) {
         return -1;
     }
+// QTI_BEGIN: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
 
     // HEVC NAL-header (16-bit)
     //  1   6      6     3
@@ -6720,6 +6730,7 @@ int32_t MPEG4Source::parseHEVCLayerId(const uint8_t *data, size_t size) {
     return 0;
 }
 
+// QTI_END: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
 size_t MPEG4Source::getNALLengthSizeFromAvcCsd(const uint8_t *data, const size_t size) const {
     CHECK(data != nullptr);
     CHECK(size >= 7);
@@ -7263,18 +7274,26 @@ media_status_t MPEG4Source::read(
                     meta, AMEDIAFORMAT_KEY_TARGET_TIME, targetSampleTimeUs);
         }
 
+// QTI_BEGIN: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
         if (mIsAVC) {
             uint32_t layerId = FindAVCLayerId(
                     (const uint8_t *)mBuffer->data(), mBuffer->range_length());
+// QTI_END: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
             AMediaFormat_setInt32(meta, AMEDIAFORMAT_KEY_TEMPORAL_LAYER_ID, layerId);
+// QTI_BEGIN: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
         } else if (mIsHEVC) {
             int32_t layerId = parseHEVCLayerId(
                     (const uint8_t *)mBuffer->data(), mBuffer->range_length());
             if (layerId >= 0) {
+// QTI_END: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
                 AMediaFormat_setInt32(meta, AMEDIAFORMAT_KEY_TEMPORAL_LAYER_ID, layerId);
+// QTI_BEGIN: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
             }
+// QTI_END: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
+// QTI_BEGIN: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
         }
 
+// QTI_END: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
         if (isSyncSample) {
             AMediaFormat_setInt32(meta, AMEDIAFORMAT_KEY_IS_SYNC_FRAME, 1);
         }
@@ -7513,18 +7532,26 @@ media_status_t MPEG4Source::fragmentedRead(
                 AMediaFormat_setInt64(bufmeta, AMEDIAFORMAT_KEY_TARGET_TIME, targetSampleTimeUs);
             }
 
+// QTI_BEGIN: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
             if (mIsAVC) {
                 uint32_t layerId = FindAVCLayerId(
                         (const uint8_t *)mBuffer->data(), mBuffer->range_length());
+// QTI_END: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
                 AMediaFormat_setInt32(bufmeta, AMEDIAFORMAT_KEY_TEMPORAL_LAYER_ID, layerId);
+// QTI_BEGIN: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
             } else if (mIsHEVC) {
                 int32_t layerId = parseHEVCLayerId(
                         (const uint8_t *)mBuffer->data(), mBuffer->range_length());
                 if (layerId >= 0) {
+// QTI_END: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
                     AMediaFormat_setInt32(bufmeta, AMEDIAFORMAT_KEY_TEMPORAL_LAYER_ID, layerId);
+// QTI_BEGIN: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
                 }
+// QTI_END: 2018-10-03: Audio: MPEG4Extractor: add layer-id parsing support for HEVC
+// QTI_BEGIN: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
             }
 
+// QTI_END: 2016-07-12: Audio: stagefright: Enhance MPEG4 writer/extractor to store/retrieve layer info
             if (isSyncSample) {
                 AMediaFormat_setInt32(bufmeta, AMEDIAFORMAT_KEY_IS_SYNC_FRAME, 1);
             }
@@ -7685,6 +7712,10 @@ static bool isCompatibleBrand(uint32_t fourcc) {
     static const uint32_t kCompatibleBrands[] = {
         FOURCC("isom"),
         FOURCC("iso2"),
+        FOURCC("iso3"),
+        FOURCC("iso4"),
+        FOURCC("iso5"),
+        FOURCC("iso6"),
         FOURCC("avc1"),
         FOURCC("hvc1"),
         FOURCC("hev1"),

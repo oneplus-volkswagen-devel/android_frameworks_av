@@ -306,6 +306,16 @@ public:
         }
         return false;
     }
+// QTI_BEGIN: 2023-07-20: Audio: audiopolicy: use tempMuteDurationMs to adjust the sleep period of direct output
+    bool isDirectOutput() {
+        if (const auto policyPort = getPolicyAudioPort(); policyPort != nullptr) {
+            if (const auto port = policyPort->asAudioPort(); port != nullptr) {
+                return port->isDirectOutput();
+            }
+        }
+        return false;
+    }
+// QTI_END: 2023-07-20: Audio: audiopolicy: use tempMuteDurationMs to adjust the sleep period of direct output
 
     sp<TrackClientDescriptor> getHighestPriorityClientForVolumeSource(
             VolumeSource vs, bool activeOnly = false) const;
@@ -315,6 +325,7 @@ public:
                                   product_strategy_t strategy = PRODUCT_STRATEGY_NONE,
                                   bool preferredDeviceOnly = false) const;
 
+    audio_io_handle_t mIoHandle;           // output handle
     // override ClientMapHandler to abort when removing a client when active.
     bool removeClient(audio_port_handle_t portId, bool checkExists = true) override {
         if (checkExists) {
@@ -590,7 +601,6 @@ public:
             const VolumeSource& vs);
 
     const sp<IOProfile> mProfile;          // I/O profile this output derives from
-    audio_io_handle_t mIoHandle;           // output handle
     uint32_t mLatency;                  //
     using AudioOutputDescriptor::mFlags;
     sp<SwAudioOutputDescriptor> mOutput1;    // used by duplicated outputs: first output
@@ -691,6 +701,13 @@ public:
      */
     audio_io_handle_t getA2dpOutput() const;
 
+// QTI_BEGIN: 2018-03-23: Audio: Check if A2DP playback happens via primary output
+    /**
+     * return true if primary HAL supports A2DP Playback
+     */
+    bool isA2dpOnPrimary() const;
+
+// QTI_END: 2018-03-23: Audio: Check if A2DP playback happens via primary output
     /**
      * returns true if primary HAL supports A2DP Offload
      */

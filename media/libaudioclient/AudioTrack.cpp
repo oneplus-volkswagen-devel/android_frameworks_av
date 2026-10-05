@@ -41,12 +41,18 @@
 #include <media/AudioSystem.h>
 #include <media/MediaMetricsItem.h>
 #include <media/TypeConverter.h>
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+#include <binder/MemoryDealer.h>
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
 // QTI_BEGIN: 2018-08-03: Audio: set mTrackOffload for direct pcm output.
 #include "media/AVMediaExtensions.h"
 // QTI_END: 2018-08-03: Audio: set mTrackOffload for direct pcm output.
 
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+#define DUMMY_TRACK_SMP_BUF_SIZE        12000
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
 
 static const int kMaxLoopCountNotifications = 32;
 static constexpr char kAudioServiceName[] = "audio";
@@ -247,7 +253,8 @@ status_t AudioTrack::getMetrics(mediametrics::Item * &item)
 }
 
 AudioTrack::AudioTrack(const AttributionSourceState& attributionSource)
-    : mClientAttributionSource(attributionSource)
+    : mClientAttributionSource(attributionSource),
+      mPauseTimeRealUs(0)
 {
 }
 
@@ -293,7 +300,8 @@ AudioTrack::AudioTrack(
         const audio_attributes_t* pAttributes,
         bool doNotReconnect,
         float maxRequiredSpeed)
-    : mTrackOffloaded(false)
+    :  mPauseTimeRealUs(0),
+      mTrackOffloaded(false)
 {
     mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
 
@@ -331,6 +339,24 @@ AudioTrack::~AudioTrack()
         .set(AMEDIAMETRICS_PROP_STATUS, (int32_t)mStatus)
         .record();
 
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+    // To avoid A2DP session stop on remote device during Next/Prev of playback
+    // for split a2dp solution via offload path, create dummy Low latency session
+    // which will ensure session is active
+    if(isOffloadedOrDirect_l() &&
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+// QTI_BEGIN: 2022-10-06: Audio: av: Added dummy track support for Bluetooth BLE
+       ((AudioSystem::getDeviceConnectionState((audio_devices_t)
+         AUDIO_DEVICE_OUT_BLE_HEADSET,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) ||
+        (AudioSystem::getDeviceConnectionState((audio_devices_t)
+        AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE))) {
+        ALOGD("Creating Dummy track for A2DP/BLE offload session");
+        createDummyAudioSessionForBluetooth();
+// QTI_END: 2022-10-06: Audio: av: Added dummy track support for Bluetooth BLE
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+    }
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+
     stopAndJoinCallbacks(); // checks mStatus
 
     if (mStatus == NO_ERROR && mAudioTrack != nullptr) {
@@ -351,6 +377,60 @@ AudioTrack::~AudioTrack()
     }
 }
 
+// QTI_BEGIN: 2022-10-06: Audio: av: Added dummy track support for Bluetooth BLE
+void AudioTrack::createDummyAudioSessionForBluetooth() {
+// QTI_END: 2022-10-06: Audio: av: Added dummy track support for Bluetooth BLE
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+   sp<AudioTrack> dummyTrack;
+
+   // Do not create dummy session if session is paused more than 3 secs
+   if(mPauseTimeRealUs &&
+      ((systemTime(SYSTEM_TIME_MONOTONIC) / 1000ll) - mPauseTimeRealUs) >= 3000000ll)
+      return;
+
+   sp<MemoryDealer> heap;
+   sp<IMemory> iMem;
+   uint8_t* p;
+
+   heap = new MemoryDealer(1024*1024, "AudioTrack Heap Base");
+   iMem = heap->allocate(DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+   // TODO(b/142073222): Using unsecurePointer() has some associated security pitfalls
+   //       (see declaration for details).
+   //       Either document why it is safe in this case or address the
+   //       issue (e.g. by copying).
+   p = static_cast<uint8_t*>(iMem->unsecurePointer());
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+   memset(p, '\0', DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
+
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+// QTI_BEGIN: 2023-01-11: Audio: av: Adjust createDummyAudioSessionForBluetooth() streamType
+   dummyTrack = new AudioTrack(AUDIO_STREAM_SYSTEM,// stream type
+// QTI_END: 2023-01-11: Audio: av: Adjust createDummyAudioSessionForBluetooth() streamType
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+                               48000, AUDIO_FORMAT_PCM_16_BIT,
+                               AUDIO_CHANNEL_OUT_STEREO, iMem,
+                               AUDIO_OUTPUT_FLAG_FAST);
+   status_t status = dummyTrack->initCheck();
+   if(status != NO_ERROR) {
+       dummyTrack.clear();
+       ALOGD("Dummry Track Failed for initCheck()");
+       iMem.clear();
+       heap.clear();
+       return;
+   }
+
+   // start play
+   ALOGD("split_a2dp dummy track start success");
+   dummyTrack->start();
+   usleep(10000);
+   dummyTrack->stop();
+   dummyTrack.clear();
+   iMem.clear();
+   heap.clear();
+   ALOGD("split_a2dp dummy track stop completed");
+}
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
 void AudioTrack::stopAndJoinCallbacks() {
     // Make sure that callback function exits in the case where
     // it is looping on buffer full condition in obtainBuffer().
@@ -532,6 +612,14 @@ status_t AudioTrack::set(
                     BAD_VALUE, StringPrintf("%s: Invalid stream type %d", __func__, streamType));
         }
         mOriginalStreamType = streamType;
+// QTI_BEGIN: 2018-11-08: Audio: AudioTrack: initialize audio attributes properly
+        mAttributes.content_type = AUDIO_CONTENT_TYPE_UNKNOWN;
+        mAttributes.usage = AUDIO_USAGE_UNKNOWN;
+// QTI_END: 2018-11-08: Audio: AudioTrack: initialize audio attributes properly
+        mAttributes.flags = AUDIO_FLAG_NONE;
+// QTI_BEGIN: 2018-11-08: Audio: AudioTrack: initialize audio attributes properly
+        strcpy(mAttributes.tags, "");
+// QTI_END: 2018-11-08: Audio: AudioTrack: initialize audio attributes properly
     } else {
         mOriginalStreamType = AUDIO_STREAM_DEFAULT;
     }
@@ -724,6 +812,9 @@ status_t AudioTrack::start()
 
 
     mInUnderrun = true;
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+    mPauseTimeRealUs = 0;
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
 
     State previousState = mState;
     if (previousState == STATE_PAUSED_STOPPING) {
@@ -1019,6 +1110,9 @@ void AudioTrack::pause()
     }
     mProxy->interrupt();
     mAudioTrack->pause();
+// QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
+    mPauseTimeRealUs = systemTime(SYSTEM_TIME_MONOTONIC) / 1000ll;
+// QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
 
     if (isOffloaded_l()) {
         if (mOutput != AUDIO_IO_HANDLE_NONE) {
@@ -1033,12 +1127,16 @@ void AudioTrack::pause()
 
             // TODO: check return code for getRenderPosition.
 
+// QTI_BEGIN: 2014-03-06: Audio: AudioTrack: When paused, return cached playback position
             uint32_t halFrames;
             AudioSystem::getRenderPosition(mOutput, &halFrames, &mPausedPosition);
+// QTI_END: 2014-03-06: Audio: AudioTrack: When paused, return cached playback position
             ALOGV("%s(%d): for offload, cache current position %u",
                     __func__, mPortId, mPausedPosition);
+// QTI_BEGIN: 2014-03-06: Audio: AudioTrack: When paused, return cached playback position
         }
     }
+// QTI_END: 2014-03-06: Audio: AudioTrack: When paused, return cached playback position
 }
 
 status_t AudioTrack::flushFromFrame(
@@ -1349,6 +1447,7 @@ status_t AudioTrack::setPlaybackRate(const AudioPlaybackRate &playbackRate)
                 AMEDIAMETRICS_PROP_PLAYBACK_PITCH, (double)playbackRateTemp.mPitch)
         .record();
 
+
 // QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
     if (mTrackOffloaded &&
         !isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
@@ -1622,10 +1721,12 @@ status_t AudioTrack::getPosition(uint32_t *position)
         if (isOffloaded_l() && ((mState == STATE_PAUSED) || (mState == STATE_PAUSED_STOPPING))) {
             ALOGV("%s(%d): called in paused state, return cached position %u",
                 __func__, mPortId, mPausedPosition);
+// QTI_BEGIN: 2014-03-06: Audio: AudioTrack: When paused, return cached playback position
             *position = mPausedPosition;
             return NO_ERROR;
         }
 
+// QTI_END: 2014-03-06: Audio: AudioTrack: When paused, return cached playback position
         uint32_t dspFrames = 0;
         if (mOutput != AUDIO_IO_HANDLE_NONE) {
             uint32_t halFrames; // actually unused
@@ -1841,8 +1942,10 @@ status_t AudioTrack::createTrack_l()
     }
 
     {
+// QTI_BEGIN: 2016-03-09: Audio: AudioTrack: Use original flags during track recreation
     // mFlags (not mOrigFlags) is modified depending on whether fast request is accepted.
     // After fast request is denied, we will request again if IAudioTrack is re-created.
+// QTI_END: 2016-03-09: Audio: AudioTrack: Use original flags during track recreation
     // Client can only express a preference for FAST.  Server will perform additional tests.
     if (mFlags & AUDIO_OUTPUT_FLAG_FAST) {
         // either of these use cases:
@@ -2958,8 +3061,10 @@ status_t AudioTrack::restoreTrack_l(const char *from, bool forceRestore)
     const uint32_t RETRY_DELAY_US = 150000;
     int retries = INITIAL_RETRIES;
 retry:
+// QTI_BEGIN: 2016-03-09: Audio: AudioTrack: Use original flags during track recreation
     mFlags = mOrigFlags;
 
+// QTI_END: 2016-03-09: Audio: AudioTrack: Use original flags during track recreation
     // If a new IAudioTrack is successfully created, createTrack_l() will modify the
     // following member variables: mAudioTrack, mCblkMemory and mCblk.
     // It will also delete the strong references on previous IAudioTrack and IMemory.

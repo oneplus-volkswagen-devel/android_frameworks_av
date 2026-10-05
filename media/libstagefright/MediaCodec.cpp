@@ -790,6 +790,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientCreated() {
         ALOGW("Service isn't available");
         return;
     }
+    if (service == NULL) {
+        return;
+    }
     service->notifyClientCreated(getClientInfo());
 }
 
@@ -802,6 +805,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientStarted(
         return;
     }
     clientConfig.clientInfo = getClientInfo();
+    if (service == NULL) {
+        return;
+    }
     service->notifyClientStarted(clientConfig);
 }
 
@@ -814,6 +820,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientStopped(
         return;
     }
     clientConfig.clientInfo = getClientInfo();
+    if (service == NULL) {
+        return;
+    }
     service->notifyClientStopped(clientConfig);
 }
 
@@ -826,6 +835,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientConfigChanged(
         return;
     }
     clientConfig.clientInfo = getClientInfo();
+    if (service == NULL) {
+        return;
+    }
     service->notifyClientConfigChanged(clientConfig);
 }
 
@@ -3343,8 +3355,8 @@ static void loadCodecProperties(mediaformatshaper::shaperHandle_t shaperHandle,
                     // separate that, so setMap() sees the triple  kind, key, value
                     const char *kind = &mapSrc[mappingPrefixLen];
                     const char *sep = strchr(kind, '-');
-                    const char *key = sep+1;
                     if (sep != NULL) {
+                        const char *key = sep+1;
                          std::string xkind = std::string(kind, sep-kind);
                         (void)(sShaperOps->setMap)(shaperHandle, xkind.c_str(),
                                                    key, target.c_str());

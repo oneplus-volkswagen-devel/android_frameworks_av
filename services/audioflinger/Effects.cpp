@@ -2978,6 +2978,11 @@ static const effect_uuid_t SL_IID_DAP_ = { 0x46d279d9, 0x9be7, 0x453d, 0x9d7c,
                                          { 0xef, 0x93, 0x7f, 0x67, 0x55, 0x87 } };
 const effect_uuid_t * const SL_IID_DAP = &SL_IID_DAP_;
 
+// Dirac
+static const effect_uuid_t SL_IID_DIRAC_ = { 0xec7178ec, 0xe5e1, 0x4432, 0xa3f4,
+                                           { 0x46, 0x57, 0xe6, 0x79, 0x52, 0x10 } };
+const effect_uuid_t * const SL_IID_DIRAC = &SL_IID_DIRAC_;
+
 /* static */
 bool EffectChain::isEffectEligibleForBtNrecSuspend_l(const effect_uuid_t* type) {
     // Only NS and AEC are suspended when BtNRec is off
@@ -2998,6 +3003,7 @@ bool EffectChain::isEffectEligibleForSuspend(const effect_descriptor_t& desc)
           (memcmp(&desc.type, SL_IID_VISUALIZATION, sizeof(effect_uuid_t)) == 0) ||
           (memcmp(&desc.type, SL_IID_VOLUME, sizeof(effect_uuid_t)) == 0) ||
           (memcmp(&desc.type, SL_IID_DAP, sizeof(effect_uuid_t)) == 0) ||
+          (memcmp(&desc.type, SL_IID_DIRAC, sizeof(effect_uuid_t)) == 0) ||
           (memcmp(&desc.type, SL_IID_DYNAMICSPROCESSING, sizeof(effect_uuid_t)) == 0)))) {
         return false;
     }

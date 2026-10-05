@@ -13,12 +13,22 @@
 ** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
+// QTI_BEGIN: 2023-06-21: Video: libmediaplayerservice: Enable perfboost during heif decode
+**
+** Changes from Qualcomm Innovation Center are provided under the following license:
+** Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+** SPDX-License-Identifier: BSD-3-Clause-Clear
+**
+// QTI_END: 2023-06-21: Video: libmediaplayerservice: Enable perfboost during heif decode
 */
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "MetadataRetrieverClient"
 #include <utils/Log.h>
 
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+#include <inttypes.h>
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -134,8 +144,9 @@ status_t MetadataRetrieverClient::setDataSource(
 
 status_t MetadataRetrieverClient::setDataSource(int fd, int64_t offset, int64_t length)
 {
-    ALOGV("setDataSource fd=%d (%s), offset=%lld, length=%lld",
-            fd, nameForFd(fd).c_str(), (long long) offset, (long long) length);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    ALOGV("setDataSource fd=%d, offset=%" PRId64 ", length=%" PRId64 "", fd, offset, length);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     Mutex::Autolock lock(mLock);
     struct stat sb;
     int ret = fstat(fd, &sb);
@@ -143,20 +154,27 @@ status_t MetadataRetrieverClient::setDataSource(int fd, int64_t offset, int64_t 
         ALOGE("fstat(%d) failed: %d, %s", fd, ret, strerror(errno));
         return BAD_VALUE;
     }
-    ALOGV("st_dev  = %llu", static_cast<unsigned long long>(sb.st_dev));
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    ALOGV("st_dev  = %" PRIu64 "", static_cast<uint64_t>(sb.st_dev));
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     ALOGV("st_mode = %u", sb.st_mode);
     ALOGV("st_uid  = %lu", static_cast<unsigned long>(sb.st_uid));
     ALOGV("st_gid  = %lu", static_cast<unsigned long>(sb.st_gid));
-    ALOGV("st_size = %llu", static_cast<unsigned long long>(sb.st_size));
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    ALOGV("st_size = %" PRIu64 "", sb.st_size);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
 
     if (offset >= sb.st_size) {
-        ALOGE("offset (%lld) bigger than file size (%llu)",
-                (long long)offset, (unsigned long long)sb.st_size);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+        ALOGE("offset (%" PRId64 ") bigger than file size (%" PRIu64 ")", offset, sb.st_size);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
         return BAD_VALUE;
     }
     if (offset + length > sb.st_size) {
         length = sb.st_size - offset;
-        ALOGV("calculated length = %lld", (long long)length);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+        ALOGV("calculated length = %" PRId64 "", length);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     }
 
     player_type playerType =
@@ -180,6 +198,13 @@ status_t MetadataRetrieverClient::setDataSource(
     ALOGV("setDataSource(IDataSource)");
     Mutex::Autolock lock(mLock);
 
+    if (mime && strcasecmp(mime, "image/heif") == 0) {
+        // Trigger Perf boost to support faster HEIF decoding. Set the duration
+        // to indefinite. This perflock will be released when MetadataRetrieverClient
+        // is released.
+        mPerfBoost = std::make_unique<HeifPerfBoost>(true, 0);
+    }
+
     sp<DataSource> dataSource = CreateDataSourceFromIDataSource(source);
     player_type playerType =
         MediaPlayerFactory::getPlayerType(NULL /* client */, dataSource);
@@ -196,8 +221,10 @@ Mutex MetadataRetrieverClient::sLock;
 sp<IMemory> MetadataRetrieverClient::getFrameAtTime(
         int64_t timeUs, int option, int colorFormat, bool metaOnly)
 {
-    ALOGV("getFrameAtTime: time(%lld us) option(%d) colorFormat(%d), metaOnly(%d)",
-            (long long)timeUs, option, colorFormat, metaOnly);
+// QTI_BEGIN: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
+    ALOGV("getFrameAtTime: time(%" PRId64 "us) option(%d) colorFormat(%d), metaOnly(%d)",
+            timeUs, option, colorFormat, metaOnly);
+// QTI_END: 2018-01-23: Audio: stagefright: Make classes customizable and add AV extensions
     Mutex::Autolock lock(mLock);
     Mutex::Autolock glock(sLock);
     if (mRetriever == NULL) {

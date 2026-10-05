@@ -145,8 +145,10 @@ enum AudioEncoding {
     kAudioEncodingPcm16bit = 2,
     kAudioEncodingPcm8bit = 3,
     kAudioEncodingPcmFloat = 4,
+// QTI_BEGIN: 2021-04-23: Audio: codec2: Add support for 24 and 32 bit formats
     kAudioEncodingPcm24bitPacked = 21,
     kAudioEncodingPcm32bit = 22,
+// QTI_END: 2021-04-23: Audio: codec2: Add support for 24 and 32 bit formats
 };
 
 }  // namespace android

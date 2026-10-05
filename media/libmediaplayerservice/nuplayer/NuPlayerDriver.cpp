@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+// QTI_BEGIN: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
 //#define LOG_NDEBUG 0
+// QTI_END: 2022-10-06: Video: Merge "Revert "Dynamic Video Framework Log Enablement"" into t-keystone-qcom-dev
 #define LOG_TAG "NuPlayerDriver"
 #include <inttypes.h>
 #include <android-base/macros.h>
@@ -1102,10 +1104,7 @@ void NuPlayerDriver::notifyListener_l(
                     // don't send completion event when looping
                     return;
                 }
-                if (property_get_bool("persist.debug.sf.stats", false)) {
-                    Vector<String16> args;
-                    dump(-1, args);
-                }
+
                 mPlayer->pause();
                 mState = STATE_PAUSED;
             }

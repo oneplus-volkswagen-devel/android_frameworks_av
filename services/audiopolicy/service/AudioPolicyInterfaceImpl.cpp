@@ -19,6 +19,7 @@
 
 #include "AudioPolicyService.h"
 #include "AudioRecordClient.h"
+#include <cutils/properties.h>
 
 #include <android/content/AttributionSourceState.h>
 #include <android_media_audiopolicy.h>
