@@ -1515,7 +1515,7 @@ public:
     wp<AudioSystem::AudioDeviceCallback> mDeviceCallback;
 
 // QTI_BEGIN: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
-    int64_t                mPauseTimeRealUs;
+    int64_t                mPauseTimeRealUs = 0;
 
 // QTI_END: 2018-07-10: Audio: Create dummy track to avoid a2dp suspend
 
@@ -1561,7 +1561,7 @@ protected:
     std::string mCallerName; // for example "aaudio"
 
 // QTI_BEGIN: 2018-03-22: Audio: add support to enable track offload using direct output
-    bool                    mTrackOffloaded;
+    bool                    mTrackOffloaded = false;
 // QTI_END: 2018-03-22: Audio: add support to enable track offload using direct output
 
     // report error to mediametrics.

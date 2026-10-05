@@ -253,8 +253,8 @@ status_t AudioTrack::getMetrics(mediametrics::Item * &item)
 }
 
 AudioTrack::AudioTrack(const AttributionSourceState& attributionSource)
-    : mClientAttributionSource(attributionSource),
-      mPauseTimeRealUs(0)
+    : mPauseTimeRealUs(0),
+      mClientAttributionSource(attributionSource)
 {
 }
 
